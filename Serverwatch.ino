@@ -296,6 +296,8 @@ void setup() {
   Serial.println(lastPowerStatus ? "HIGH (Spannung erkannt)" : "LOW (Keine Spannung)");
   
   Serial.print("Verbinde mit WiFi");
+  String hostName = "ServerWatch-" + String(nodeName);
+  WiFi.setHostname(hostName.c_str());
   WiFi.begin(ssid, password);
   
   while (WiFi.status() != WL_CONNECTED) {
