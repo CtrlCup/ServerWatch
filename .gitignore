@@ -1,0 +1,32 @@
+# Arduino IDE
+*.ino.bin
+*.ino.elf
+*.ino.map
+*.ino.partitions.bin
+*.ino.bootloader.bin
+
+# Build artifacts
+build/
+*.hex
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+*.tmp
+
+# Logs
+*.log
+
+# Personal configuration (optional - wenn du sensible Daten nicht commiten willst)
+# Serverwatch.ino
+
+# Temporary files
+*.bak
+*.old
