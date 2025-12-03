@@ -28,6 +28,16 @@ Ein intelligentes Server-Monitoring-System basierend auf ESP32-C3, das die Verf�
 
 **ServerWatch** ist eine kostengünstige und elegante Lösung zur Überwachung und Fernsteuerung deines Heimservers oder PC. Der ESP32-C3 prüft kontinuierlich die Netzwerkerreichbarkeit und Stromversorgung und stellt diese Informationen über ein modernes, responsives Web-Interface zur Verfügung. Mit nur einem Klick kann der Server remote gestartet werden.
 
+### 🆕 Multi-ESP Version
+
+Die erweiterte **ServerWatch_Multi.ino** ermöglicht:
+- 🔗 **Automatische ESP-Erkennung** - ESPs finden sich automatisch im Netzwerk via mDNS
+- 🌐 **Multi-Server Dashboard** - Alle Server in einer übersichtlichen Kachel-Ansicht
+- 🔄 **Cross-ESP Control** - Steuere jeden Server von jedem ESP aus
+- 🌓 **Dark/Light Mode** - Modernes UI mit Theme-Umschaltung
+- ⚡ **WebSocket Updates** - Echtzeit-Statusaktualisierungen
+- 📱 **Vollständig Responsiv** - Perfekt für Mobile, Tablet und Desktop
+
 ---
 
 ## 📸 Screenshots
@@ -105,6 +115,20 @@ GPIO 3  →  POWER_BUTTON_PIN  (Ausgang: Power-Button Pins am Mainboard)
 - [Arduino IDE](https://www.arduino.cc/en/software) (Version 1.8.x oder 2.x)
 - ESP32 Board-Support für Arduino IDE
 
+### 📦 Zusätzliche Libraries für Multi-ESP Version
+
+Für **ServerWatch_Multi.ino** werden zusätzliche Libraries benötigt:
+
+1. **ArduinoJson** (für JSON-Kommunikation):
+   - Arduino IDE → Werkzeuge → Bibliotheken verwalten
+   - Suche nach "ArduinoJson" von Benoit Blanchon
+   - Version 6.x oder höher installieren
+
+2. **WebSockets** (für Echtzeit-Updates):
+   - Arduino IDE → Werkzeuge → Bibliotheken verwalten  
+   - Suche nach "WebSockets" von Markus Sattler
+   - Aktuelle Version installieren
+
 ### Arduino IDE einrichten
 
 1. **ESP32 Boards hinzufügen:**
@@ -146,7 +170,23 @@ GPIO 3  →  POWER_BUTTON_PIN  (Ausgang: Power-Button Pins am Mainboard)
 
 ## ⚙️ Konfiguration
 
+### Standard Version (`Serverwatch.ino`)
+
 Bearbeite die folgenden Zeilen in `Serverwatch.ino`:
+
+### Multi-ESP Version (`ServerWatch_Multi.ino`)
+
+Die erweiterte Version hat zusätzliche Konfigurationsoptionen:
+
+```cpp
+// === Multi-ESP Spezifische Einstellungen ===
+const char* mdnsServiceName = "serverwatch";      // mDNS Service Name
+const int scanInterval = 10000;                   // Netzwerk-Scan Intervall (ms)
+const int statusCheckInterval = 3000;             // Status-Check Intervall (ms)  
+const int pingTimeout = 1000;                     // Ping Timeout (ms)
+const int RESET_BUTTON_PIN = 5;                   // Reset-Button Pin (-1 wenn nicht verwendet)
+const int resetButtonTime = 500;                  // Reset-Button Druck Dauer (ms)
+```
 
 ### 1️⃣ WiFi-Einstellungen
 
