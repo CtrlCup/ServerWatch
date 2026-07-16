@@ -27,6 +27,9 @@ bool lastServerStatus = false;
 bool lastPowerStatus = false;
 unsigned long lastCheck = 0;
 const unsigned long checkInterval = 3000; // Alle 3 Sekunden prüfen
+unsigned long lastWiFiCheck = 0;
+const unsigned long wifiCheckInterval = 10000; // WiFi-Status alle 10 Sekunden prüfen
+
 
 bool checkServerReachable() {
   WiFiClient client;
@@ -298,6 +301,11 @@ void setup() {
   Serial.print("Verbinde mit WiFi");
   String hostName = "ServerWatch-" + String(nodeName);
   WiFi.setHostname(hostName.c_str());
+  
+  // Stellt sicher, dass das WiFi-Modul nicht in den Schlafmodus geht (wichtig für Fritzboxen)
+  WiFi.setSleep(false);
+  WiFi.setAutoReconnect(true);
+  
   WiFi.begin(ssid, password);
   
   while (WiFi.status() != WL_CONNECTED) {
@@ -323,6 +331,17 @@ void loop() {
   server.handleClient();
   
   unsigned long currentMillis = millis();
+  
+  // WiFi Verbindung prüfen und ggf. neu verbinden
+  if (currentMillis - lastWiFiCheck >= wifiCheckInterval) {
+    lastWiFiCheck = currentMillis;
+    if (WiFi.status() != WL_CONNECTED) {
+      Serial.println("WiFi Verbindung verloren! Versuche neu zu verbinden...");
+      WiFi.disconnect();
+      WiFi.begin(ssid, password);
+    }
+  }
+  
   if (currentMillis - lastCheck >= checkInterval) {
     lastCheck = currentMillis;
     

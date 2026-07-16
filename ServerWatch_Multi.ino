@@ -60,6 +60,8 @@ struct RemoteESP {
 std::map<String, RemoteESP> remoteESPs;
 unsigned long lastScan = 0;
 unsigned long lastStatusCheck = 0;
+unsigned long lastWiFiCheck = 0;
+const unsigned long wifiCheckInterval = 10000;
 bool localServerStatus = false;
 bool localPowerStatus = false;
 int localPingTime = 0;
@@ -194,6 +196,10 @@ void setupWiFi() {
     espHostname = "ServerWatch-" + String(serverName);
     espHostname.replace(" ", "_");
     WiFi.setHostname(espHostname.c_str());
+    
+    // Stellt sicher, dass das WiFi-Modul nicht in den Schlafmodus geht (wichtig für Fritzboxen)
+    WiFi.setSleep(false);
+    WiFi.setAutoReconnect(true);
     
     WiFi.begin(ssid, password);
     
@@ -520,16 +526,28 @@ void loop() {
     server.handleClient();
     webSocket.loop();
     
+    unsigned long currentMillis = millis();
+    
+    // WiFi Verbindung prüfen und ggf. neu verbinden
+    if (currentMillis - lastWiFiCheck >= wifiCheckInterval) {
+        lastWiFiCheck = currentMillis;
+        if (WiFi.status() != WL_CONNECTED) {
+            Serial.println("WiFi Verbindung verloren! Versuche neu zu verbinden...");
+            WiFi.disconnect();
+            WiFi.begin(ssid, password);
+        }
+    }
+    
     // Periodischer Status Check
-    if (millis() - lastStatusCheck >= statusCheckInterval) {
-        lastStatusCheck = millis();
+    if (currentMillis - lastStatusCheck >= statusCheckInterval) {
+        lastStatusCheck = currentMillis;
         updateLocalStatus();
         sendStatusToClients();
     }
     
     // Periodischer ESP Scan
-    if (millis() - lastScan >= scanInterval) {
-        lastScan = millis();
+    if (currentMillis - lastScan >= scanInterval) {
+        lastScan = currentMillis;
         scanForESPs();
     }
 }
