@@ -154,6 +154,13 @@ const char* sim_cfg(const char* name, const char* def) {
     return v ? strdup(v) : def;
 }
 
+bool sim_cfg_bool(const char* name, bool def) {
+    std::string key = std::string("SWCFG_") + name;
+    const char* v = getenv(key.c_str());
+    if (!v) return def;
+    return strcmp(v, "true") == 0 || strcmp(v, "1") == 0;
+}
+
 size_t HardwareSerial::printf(const char* fmt, ...) {
     char buf[4096];
     va_list ap;

@@ -268,6 +268,8 @@ BaseType_t xSemaphoreGiveRecursive(SemaphoreHandle_t s);
 // Vom Build-Skript eingesetzt: top-level `const char* X = "..."` -> sim_cfg("X", "...")
 // Ueberschreibbar per Umgebungsvariable SWCFG_X.
 const char* sim_cfg(const char* name, const char* def);
+// Ebenso `const bool X = true|false;` -> sim_cfg_bool("X", ...), Umgebungsvariable SWCFG_X=true|false
+bool sim_cfg_bool(const char* name, bool def);
 
 namespace sim {
 // Simulierte Zeit in ms seit "Boot" (Echtzeit * SIM_TIME_SCALE).

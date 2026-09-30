@@ -27,6 +27,7 @@ const int serverCheckPort = 80;                   // Port für Server-Check (80=
 const int POWER_CHECK_PIN = 4;                    // Pin zum Prüfen der Spannung vom Server
 const int POWER_BUTTON_PIN = 3;                   // Pin zum Server Ein/Ausschalten
 const int RESET_BUTTON_PIN = 5;                   // Pin zum Server Reset (optional, -1 wenn nicht verwendet)
+const bool usePowerSense = true;                  // false, wenn POWER_CHECK_PIN nicht mit dem Mainboard verbunden ist
 
 // Timing Konfiguration
 const int powerButtonTime = 800;                  // Millisekunden für Power-Button Druck
@@ -45,7 +46,7 @@ const char* mdnsServiceName = "serverwatch";      // mDNS Service Name für Auto
 // ENDE DER KONFIGURATIONSVARIABLEN
 // ========================================
 
-const char* firmwareVersion = "1.0.7";
+const char* firmwareVersion = "1.0.8";
 
 // Webserver und WebSocket
 WebServer server(80);
@@ -58,6 +59,7 @@ struct RemoteESP {
     String serverName;
     bool serverOnline;
     bool serverPower;
+    bool powerSense;
     bool espReachable;
     unsigned long lastSeen;
     int pingTime;
@@ -278,8 +280,9 @@ bool checkServerReachable() {
 void updateLocalStatus() {
     bool reachable = checkServerReachable();
     localServerReachable = reachable;
-    localPowerStatus = (digitalRead(POWER_CHECK_PIN) == HIGH);
-    localServerStatus = reachable && localPowerStatus;
+    // Ohne Spannungsabgriff zählt allein die Erreichbarkeit (Issue #19)
+    localPowerStatus = usePowerSense && digitalRead(POWER_CHECK_PIN) == HIGH;
+    localServerStatus = usePowerSense ? reachable && localPowerStatus : reachable;
 }
 
 // ESP Netzwerk Scan
@@ -323,7 +326,8 @@ void scanForESPs() {
                 esp.ip = ip.toString();
                 esp.serverName = doc["serverName"].as<String>();
                 esp.serverOnline = doc["serverOnline"];
-                esp.serverPower = doc["serverPower"];
+                esp.serverPower = doc["serverPower"] | false;
+                esp.powerSense = doc["powerSense"] | true;
                 esp.pingTime = doc["pingTime"];
                 esp.espReachable = true;
                 esp.lastSeen = millis();
@@ -371,7 +375,8 @@ String getStatusJson(const char* type) {
     local["serverIP"] = serverIP;
     local["espIP"] = WiFi.localIP().toString();
     local["serverOnline"] = localServerStatus;
-    local["serverPower"] = localPowerStatus;
+    if (usePowerSense) local["serverPower"] = localPowerStatus;
+    else local["serverPower"] = nullptr;
     local["espReachable"] = true;
     local["pingTime"] = localPingTime;
     
@@ -384,7 +389,8 @@ String getStatusJson(const char* type) {
         remote["serverIP"] = "Remote";
         remote["espIP"] = esp.second.ip;
         remote["serverOnline"] = esp.second.serverOnline;
-        remote["serverPower"] = esp.second.serverPower;
+        if (esp.second.powerSense) remote["serverPower"] = esp.second.serverPower;
+        else remote["serverPower"] = nullptr;
         remote["espReachable"] = esp.second.espReachable;
         remote["pingTime"] = esp.second.pingTime;
     }
@@ -538,7 +544,9 @@ void setupWebServer() {
         DynamicJsonDocument doc(256);
         doc["serverName"] = serverName;
         doc["serverOnline"] = localServerStatus;
-        doc["serverPower"] = localPowerStatus;
+        if (usePowerSense) doc["serverPower"] = localPowerStatus;
+        else doc["serverPower"] = nullptr;
+        doc["powerSense"] = usePowerSense;
         doc["pingTime"] = localPingTime;
         
         String output;

@@ -18,11 +18,12 @@ const int checkPort = 80;                 // Auf welchen Port soll geprüft werd
 // GPIO Pins
 const int POWER_CHECK_PIN = 4;  // Pin zum Prüfen der Spannung (Mainboard)
 const int POWER_BUTTON_PIN = 3; // Pin zum Durchschalten (Startknopf)
+const bool usePowerSense = true; // false, wenn POWER_CHECK_PIN nicht mit dem Mainboard verbunden ist
 
 // Zeiteinstellungen
 int onTime = 800; // Zeit wie lange der Ausgang bestromt werden soll in Millisekunden
 
-const char* firmwareVersion = "1.0.7";
+const char* firmwareVersion = "1.0.8";
 
 WebServer server(80);
 
@@ -232,7 +233,7 @@ const char htmlPage[] PROGMEM = R"rawliteral(
                     }
                     
                     pingStatus.textContent = data.reachable ? 'Erreichbar' : 'Nicht erreichbar';
-                    powerStatus.textContent = data.power ? 'Vorhanden' : 'Nicht vorhanden';
+                    powerStatus.textContent = data.power === null ? 'Kein Sensor' : (data.power ? 'Vorhanden' : 'Nicht vorhanden');
                 });
         }
         
@@ -275,9 +276,10 @@ void handleStatus() {
   bool powerOk = lastPowerStatus;
   bool online = reachable && powerOk;
   
+  if (!usePowerSense) online = reachable;  // ohne Spannungsabgriff zählt allein die Erreichbarkeit (Issue #19)
   String json = "{\"online\":" + String(online ? "true" : "false") + 
                 ",\"reachable\":" + String(reachable ? "true" : "false") + 
-                ",\"power\":" + String(powerOk ? "true" : "false") + "}";
+                ",\"power\":" + String(!usePowerSense ? "null" : powerOk ? "true" : "false") + "}";
   
   server.send(200, "application/json", json);
 }
@@ -304,7 +306,7 @@ void setup() {
   
   delay(100);
   
-  lastPowerStatus = (digitalRead(POWER_CHECK_PIN) == HIGH);
+  lastPowerStatus = usePowerSense && digitalRead(POWER_CHECK_PIN) == HIGH;
   lastServerStatus = false;
   
   Serial.println("\n--- ESP32 Server Monitor ---");
@@ -384,7 +386,7 @@ void loop() {
   if (currentMillis - lastCheck >= checkInterval) {
     lastCheck = currentMillis;
     
-    bool currentPowerStatus = (digitalRead(POWER_CHECK_PIN) == HIGH);
+    bool currentPowerStatus = usePowerSense && digitalRead(POWER_CHECK_PIN) == HIGH;
     bool currentServerStatus = checkServerReachable();
     
     if (currentPowerStatus != lastPowerStatus) {

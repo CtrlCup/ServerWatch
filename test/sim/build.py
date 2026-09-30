@@ -3,8 +3,9 @@
 
 Der Sketch-Code bleibt unveraendert, es werden nur zwei mechanische Schritte angewendet
 (wie beim Arduino-Builder bzw. fuer die Pro-Knoten-Konfiguration):
-  1. Top-level `const char* NAME = "..."` -> `sim_cfg("NAME", "...")`, damit jeder
-     simulierte Knoten per Umgebungsvariable SWCFG_NAME eigene Werte (serverName, ...) bekommt.
+  1. Top-level `const char* NAME = "..."` (oder `= MAKRO;`) -> `sim_cfg("NAME", ...)` und
+     `const bool NAME = true|false;` -> `sim_cfg_bool(...)`, damit jeder simulierte Knoten per
+     Umgebungsvariable SWCFG_NAME eigene Werte (serverName, ...) bekommt.
   2. Funktionsprototypen werden vor der ersten Funktionsdefinition eingefuegt (Arduino-Verhalten).
 
 Nutzung: python3 test/sim/build.py [Sketch.ino ...]   (Standard: beide Sketches)
@@ -34,7 +35,8 @@ CXXFLAGS = [
 ]
 
 RAW_STRING = re.compile(r'R"([^(\s]*)\((.*?)\)\1"', re.S)
-CONFIG_STR = re.compile(r'^(const\s+char\s*\*\s*(?:const\s+)?)(\w+)(\s*=\s*)("(?:[^"\\\n]|\\.)*")\s*;', re.M)
+CONFIG_STR = re.compile(r'^(const\s+char\s*\*\s*(?:const\s+)?)(\w+)(\s*=\s*)("(?:[^"\\\n]|\\.)*"|[A-Z_][A-Z0-9_]*)\s*;', re.M)
+CONFIG_BOOL = re.compile(r'^(const\s+bool\s+)(\w+)(\s*=\s*)(true|false)\s*;', re.M)
 FUNC_DEF = re.compile(
     r'^(?!(?:if|else|for|while|switch|return|case|do)\b)'
     r'((?:static\s+|inline\s+)*[A-Za-z_][\w:<>,]*(?:\s*[\*&])?)\s+([\*&]?\s*[A-Za-z_]\w*)\s*\(([^;{}()]*)\)\s*(?:const\s*)?\{',
@@ -50,8 +52,9 @@ def ensure_deps():
 
 
 def transform(src: str):
-    names = [m.group(2) for m in CONFIG_STR.finditer(src)]
+    names = [m.group(2) for m in CONFIG_STR.finditer(src)] + [m.group(2) for m in CONFIG_BOOL.finditer(src)]
     src = CONFIG_STR.sub(lambda m: f'{m.group(1)}{m.group(2)}{m.group(3)}sim_cfg("{m.group(2)}", {m.group(4)});', src)
+    src = CONFIG_BOOL.sub(lambda m: f'{m.group(1)}{m.group(2)}{m.group(3)}sim_cfg_bool("{m.group(2)}", {m.group(4)});', src)
 
     # Prototypen: Raw-Strings (HTML/JS) vorher ausblenden, Positionen bleiben gleich lang.
     masked = RAW_STRING.sub(lambda m: "R" + re.sub(r"[^\n]", " ", m.group(0)[1:]), src)

@@ -183,3 +183,24 @@ def test_node_restarts_after_long_wifi_outage(swarm):
     assert swarm.wait_for(lambda: a.boots() >= 2, 330000, poll_ms=5000), "Kein Neustart nach 5 min ohne WLAN"
     a.set_ap(True)
     swarm.wait_ready(a, timeout_ms=30000)
+
+
+def test_without_power_sense_server_counts_online_when_reachable(swarm):
+    """Issue #19: Ohne Spannungsabgriff (usePowerSense=false) gilt der Server als online,
+    sobald er erreichbar ist; 'Starten' wird dann abgelehnt, 'Herunterfahren' ist moeglich."""
+    swarm.set_server("up")
+    a = swarm.add("Alpha", power=False, cfg={"usePowerSense": "false"})
+    swarm.wait_ready(a)
+    local = swarm.wait_for(lambda: a.status()["local"] if a.status()["local"]["serverOnline"] else None, 10000)
+    assert local, "Erreichbarer Server wird ohne Spannungssensor nicht als online erkannt"
+    assert local["serverPower"] is None
+    assert a.post("/control", json={"target": "local", "action": "power"}).status_code == 409
+    assert a.post("/control", json={"target": "local", "action": "shutdown"}).status_code == 200
+
+
+def test_single_without_power_sense(swarm):
+    swarm.set_server("up")
+    n = swarm.add("Solo", sketch="Serverwatch", power=False, cfg={"usePowerSense": "false"})
+    swarm.wait_ready(n)
+    s = swarm.wait_for(lambda: (lambda j: j if j["online"] else None)(n.get("/status").json()), 10000)
+    assert s == {"online": True, "reachable": True, "power": None}
