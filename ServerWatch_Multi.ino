@@ -36,6 +36,7 @@ const int statusCheckInterval = 3000;             // Millisekunden zwischen Stat
 const int pingTimeout = 1000;                     // Millisekunden Timeout für Ping-Versuche
 const int watchdogTimeoutS = 15;                  // Sekunden bis zum automatischen Neustart bei Hänger
 const unsigned long wifiRestartTimeout = 300000;  // Neustart, wenn WLAN so lange (ms) getrennt bleibt
+const unsigned long wifiBootTimeout = 20000;      // So lange (ms) wartet setup() auf das WLAN
 
 // mDNS Service Name
 const char* mdnsServiceName = "serverwatch";      // mDNS Service Name für Auto-Discovery
@@ -44,7 +45,7 @@ const char* mdnsServiceName = "serverwatch";      // mDNS Service Name für Auto
 // ENDE DER KONFIGURATIONSVARIABLEN
 // ========================================
 
-const char* firmwareVersion = "1.0.4";
+const char* firmwareVersion = "1.0.5";
 
 // Webserver und WebSocket
 WebServer server(80);
@@ -216,14 +217,20 @@ void setupWiFi() {
     
     WiFi.begin(ssid, password);
     
-    while (WiFi.status() != WL_CONNECTED) {
+    // Nicht endlos warten: klappt es nicht, übernimmt der Reconnect im loop() (Issue #5)
+    unsigned long wifiStart = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - wifiStart < wifiBootTimeout) {
         delay(500);
         Serial.print(".");
     }
     
-    Serial.println("\nWiFi verbunden!");
-    Serial.print("IP-Adresse: ");
-    Serial.println(WiFi.localIP());
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("\nWiFi verbunden!");
+        Serial.print("IP-Adresse: ");
+        Serial.println(WiFi.localIP());
+    } else {
+        Serial.println("\nWiFi noch nicht verbunden - neuer Versuch im Hintergrund");
+    }
     Serial.print("Hostname: ");
     Serial.println(espHostname);
 }

@@ -112,12 +112,11 @@ def test_boot_while_router_is_starting(swarm):
     swarm.wait_ready(a, timeout_ms=30000)
 
 
-@known_bug("boot-wifi-hang")
-def test_boot_recovers_after_initial_auth_failures(swarm):
-    """setupWiFi() wartet endlos auf WL_CONNECTED. Scheitern die ersten beiden Versuche mit
-    einem nicht-'reconnectable' Grund (z. B. 202 AUTH_FAIL), versucht der Core es nie wieder,
-    und loop() mit seinem Reconnect-Fallback wird nie erreicht -> nur Stromtrennen hilft."""
-    a = swarm.add("Alpha", ap_up=False)
+@pytest.mark.parametrize("sketch", ["ServerWatch_Multi", "Serverwatch"])
+def test_boot_recovers_after_initial_auth_failures(swarm, sketch):
+    """Regression #5: Scheitern die ersten Verbindungsversuche beim Boot mit einem nicht
+    'reconnectable' Grund (z. B. 202 AUTH_FAIL), darf setup() nicht endlos warten."""
+    a = swarm.add("Alpha", sketch=sketch, ap_up=False)
     a.set_ap(False, drop_reason=202, attempt_reason=202)
     swarm.sleep(15000)
     a.set_ap(True)

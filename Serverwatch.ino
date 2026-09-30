@@ -22,7 +22,7 @@ const int POWER_BUTTON_PIN = 3; // Pin zum Durchschalten (Startknopf)
 // Zeiteinstellungen
 int onTime = 800; // Zeit wie lange der Ausgang bestromt werden soll in Millisekunden
 
-const char* firmwareVersion = "1.0.4";
+const char* firmwareVersion = "1.0.5";
 
 WebServer server(80);
 
@@ -35,6 +35,7 @@ unsigned long lastWiFiCheck = 0;
 const unsigned long wifiCheckInterval = 10000; // WiFi-Status alle 10 Sekunden prüfen
 const int watchdogTimeoutS = 15;                  // Neustart, wenn loop() so lange (s) hängt
 const unsigned long wifiRestartTimeout = 300000;  // Neustart, wenn WLAN so lange (ms) getrennt bleibt
+const unsigned long wifiBootTimeout = 20000;      // So lange (ms) wartet setup() auf das WLAN
 bool wifiLost = false;
 unsigned long wifiLostSince = 0;
 
@@ -317,14 +318,20 @@ void setup() {
   
   WiFi.begin(ssid, password);
   
-  while (WiFi.status() != WL_CONNECTED) {
+  // Nicht endlos warten: klappt es nicht, übernimmt der Reconnect im loop() (Issue #5)
+  unsigned long wifiStart = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - wifiStart < wifiBootTimeout) {
     delay(500);
     Serial.print(".");
   }
   
-  Serial.println("\nWiFi verbunden!");
-  Serial.print("IP-Adresse: ");
-  Serial.println(WiFi.localIP());
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nWiFi verbunden!");
+    Serial.print("IP-Adresse: ");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println("\nWiFi noch nicht verbunden - neuer Versuch im Hintergrund");
+  }
   Serial.print("Node Name: ");
   Serial.println(nodeName);
   
