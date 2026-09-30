@@ -31,7 +31,7 @@ CXXFLAGS = [
     "-DARDUINO=10819", "-DESP32", "-DARDUINO_ARCH_ESP32", "-DSERVERWATCH_SIM=1",
     "-DARDUINOJSON_ENABLE_PROGMEM=0", "-DARDUINOJSON_ENABLE_ARDUINO_STREAM=0",
     "-DARDUINOJSON_ENABLE_ARDUINO_PRINT=0", "-DARDUINOJSON_ENABLE_ARDUINO_STRING=1",
-    "-I", FAKES, "-I", DEPS,
+    "-I", FAKES, "-I", DEPS, "-I", ROOT,  # ROOT: Header neben den Sketches (dashboard_html.h, secrets.h)
 ]
 
 RAW_STRING = re.compile(r'R"([^(\s]*)\((.*?)\)\1"', re.S)
@@ -88,6 +88,7 @@ def main(argv):
         run([CXX, *CXXFLAGS, "-c", "-o", runtime_obj, runtime_src])
     for sketch in sketches:
         name = os.path.splitext(os.path.basename(sketch))[0]
+        sketch_dir = os.path.dirname(os.path.join(ROOT, sketch))
         with open(os.path.join(ROOT, sketch), encoding="utf-8") as f:
             code, names = transform(f.read())
         cpp = os.path.join(OUT, name + ".cpp")
@@ -97,7 +98,7 @@ def main(argv):
             f.write("\n".join(names) + "\n")
         print(f"{sketch}: ueberschreibbare Konfiguration: {', '.join(names) or '-'}")
         obj = os.path.join(OUT, name + ".o")
-        run([CXX, *CXXFLAGS, "-Wno-switch", "-c", "-o", obj, cpp])
+        run([CXX, *CXXFLAGS, "-I", sketch_dir, "-Wno-switch", "-c", "-o", obj, cpp])
         run([CXX, "-o", os.path.join(OUT, name), obj, runtime_obj, "-lpthread"])
     print("Sim-Build OK")
 

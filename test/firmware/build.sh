@@ -11,6 +11,8 @@ build() {
     local sketch="$1" libs="$2" dir="$OUT/${1%.ino}"
     mkdir -p "$dir/src"
     cp "$ROOT/$sketch" "$dir/src/$sketch"
+    # Header neben den Sketches mitnehmen (dashboard_html.h, lokale secrets.h falls vorhanden)
+    find "$ROOT" -maxdepth 1 -name "*.h" -exec cp {} "$dir/src/" \;
     cat > "$dir/platformio.ini" <<INI
 [env:fw]
 platform = espressif32

@@ -1,0 +1,587 @@
+// AUTOMATISCH ERZEUGT aus serverwatch_Multi_interface.html mit tools/embed_html.py.
+// Nicht von Hand ändern: HTML-Datei bearbeiten und das Skript ausführen.
+#pragma once
+
+const char htmlTemplate[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>ServerWatch Multi-Monitor</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%234f46e5' stroke-width='2'%3E%3Crect x='2' y='2' width='20' height='8' rx='2'/%3E%3Crect x='2' y='14' width='20' height='8' rx='2'/%3E%3Ccircle cx='6' cy='6' r='1' fill='%234f46e5'/%3E%3Ccircle cx='6' cy='18' r='1' fill='%234f46e5'/%3E%3Cpath d='M10 6h10M10 18h10'/%3E%3C/svg%3E">
+<style>
+* {
+margin: 0;
+padding: 0;
+box-sizing: border-box;
+}
+:root {
+--bg-primary: #0f0f0f;
+--bg-secondary: #1a1a1a;
+--bg-card: linear-gradient(145deg, #1f1f1f, #151515);
+--border: #2a2a2a;
+--text-primary: #ffffff;
+--text-secondary: #a0a0a0;
+--accent: #4f46e5;
+--accent-hover: #6366f1;
+--success: #22c55e;
+--warning: #f59e0b;
+--danger: #ef4444;
+--shadow: 0 4px 20px rgba(0,0,0,0.5);
+}
+body.light {
+--bg-primary: #f5f5f5;
+--bg-secondary: #ffffff;
+--bg-card: linear-gradient(145deg, #ffffff, #f0f0f0);
+--border: #e0e0e0;
+--text-primary: #1a1a1a;
+--text-secondary: #666666;
+--shadow: 0 4px 20px rgba(0,0,0,0.1);
+}
+body {
+background: var(--bg-primary);
+color: var(--text-primary);
+font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+min-height: 100vh;
+transition: background 0.3s, color 0.3s;
+overflow-x: hidden;
+}
+.header {
+background: var(--bg-secondary);
+padding: 1rem 1.5rem;
+border-bottom: 1px solid var(--border);
+position: sticky;
+top: 0;
+z-index: 100;
+backdrop-filter: blur(10px);
+}
+.header-content {
+max-width: 1400px;
+margin: 0 auto;
+display: flex;
+justify-content: space-between;
+align-items: center;
+flex-wrap: wrap;
+gap: 1rem;
+}
+.logo {
+display: flex;
+align-items: center;
+gap: 0.75rem;
+font-size: 1.25rem;
+font-weight: 600;
+}
+.logo svg {
+width: 28px;
+height: 28px;
+}
+.theme-toggle {
+background: var(--bg-card);
+border: 1px solid var(--border);
+border-radius: 50px;
+padding: 0.5rem;
+cursor: pointer;
+transition: all 0.3s;
+display: flex;
+align-items: center;
+justify-content: center;
+}
+.theme-toggle:hover {
+transform: scale(1.1);
+}
+.theme-toggle svg {
+width: 20px;
+height: 20px;
+stroke: var(--text-primary);
+}
+.container {
+max-width: 1400px;
+margin: 0 auto;
+padding: 2rem 1rem;
+}
+.grid {
+display: grid;
+grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+gap: 1.5rem;
+margin-bottom: 2rem;
+}
+.card {
+background: var(--bg-card);
+border: 1px solid var(--border);
+border-radius: 16px;
+padding: 1.5rem;
+box-shadow: var(--shadow);
+transition: transform 0.2s, box-shadow 0.2s;
+position: relative;
+overflow: hidden;
+}
+.card:hover {
+transform: translateY(-2px);
+box-shadow: 0 6px 25px rgba(0,0,0,0.6);
+}
+.card::before {
+content: '';
+position: absolute;
+top: 0;
+left: 0;
+right: 0;
+height: 4px;
+background: var(--accent);
+opacity: 0;
+transition: opacity 0.3s;
+}
+.card.local::before {
+opacity: 1;
+}
+.card-header {
+display: flex;
+justify-content: space-between;
+align-items: flex-start;
+margin-bottom: 1.25rem;
+}
+.card-title {
+font-size: 1.125rem;
+font-weight: 600;
+display: flex;
+align-items: center;
+gap: 0.5rem;
+}
+.status-indicator {
+width: 10px;
+height: 10px;
+border-radius: 50%;
+animation: pulse 2s infinite;
+}
+.status-indicator.online {
+background: var(--success);
+}
+.status-indicator.offline {
+background: var(--danger);
+}
+.status-indicator.warning {
+background: var(--warning);
+}
+@keyframes pulse {
+0%, 100% { opacity: 1; }
+50% { opacity: 0.5; }
+}
+.badge {
+padding: 0.25rem 0.75rem;
+border-radius: 20px;
+font-size: 0.75rem;
+font-weight: 600;
+text-transform: uppercase;
+letter-spacing: 0.5px;
+}
+.badge.local {
+background: var(--accent);
+color: white;
+}
+.badge.remote {
+background: var(--border);
+color: var(--text-secondary);
+}
+.info-grid {
+display: grid;
+gap: 0.75rem;
+margin-bottom: 1.25rem;
+}
+.info-row {
+display: flex;
+justify-content: space-between;
+padding: 0.5rem;
+background: var(--bg-primary);
+border-radius: 8px;
+font-size: 0.875rem;
+}
+.info-label {
+color: var(--text-secondary);
+}
+.info-value {
+font-weight: 500;
+}
+.button-group {
+display: flex;
+gap: 0.75rem;
+flex-wrap: wrap;
+}
+.btn {
+flex: 1;
+min-width: 100px;
+padding: 0.625rem 1rem;
+border: none;
+border-radius: 8px;
+font-size: 0.875rem;
+font-weight: 600;
+cursor: pointer;
+transition: all 0.2s;
+display: flex;
+align-items: center;
+justify-content: center;
+gap: 0.5rem;
+}
+.btn:disabled {
+opacity: 0.5;
+cursor: not-allowed;
+}
+.btn-primary {
+background: var(--accent);
+color: white;
+}
+.btn-primary:hover:not(:disabled) {
+background: var(--accent-hover);
+transform: translateY(-1px);
+}
+.btn-danger {
+background: var(--danger);
+color: white;
+}
+.btn-danger:hover:not(:disabled) {
+background: #dc2626;
+transform: translateY(-1px);
+}
+.btn-secondary {
+background: var(--bg-secondary);
+color: var(--text-primary);
+border: 1px solid var(--border);
+}
+.btn-secondary:hover:not(:disabled) {
+background: var(--border);
+}
+.btn svg {
+width: 16px;
+height: 16px;
+}
+.stats-bar {
+background: var(--bg-secondary);
+border-radius: 12px;
+padding: 1rem;
+margin-top: 2rem;
+display: flex;
+justify-content: space-around;
+flex-wrap: wrap;
+gap: 1rem;
+}
+.stat-item {
+text-align: center;
+}
+.stat-value {
+font-size: 1.5rem;
+font-weight: 700;
+color: var(--accent);
+}
+.stat-label {
+font-size: 0.75rem;
+color: var(--text-secondary);
+text-transform: uppercase;
+letter-spacing: 1px;
+margin-top: 0.25rem;
+}
+@media (max-width: 640px) {
+.grid {
+grid-template-columns: 1fr;
+}
+.header-content {
+flex-direction: column;
+text-align: center;
+}
+.button-group {
+flex-direction: column;
+}
+.btn {
+width: 100%;
+}
+}
+.loading-spinner {
+display: inline-block;
+width: 16px;
+height: 16px;
+border: 2px solid var(--border);
+border-top-color: var(--accent);
+border-radius: 50%;
+animation: spin 1s linear infinite;
+}
+@keyframes spin {
+to { transform: rotate(360deg); }
+}
+.notification {
+position: fixed;
+bottom: 2rem;
+right: 2rem;
+background: var(--bg-secondary);
+border: 1px solid var(--border);
+border-radius: 12px;
+padding: 1rem 1.5rem;
+box-shadow: var(--shadow);
+transform: translateX(400px);
+transition: transform 0.3s;
+z-index: 1000;
+max-width: 90vw;
+}
+.notification.show {
+transform: translateX(0);
+}
+.notification.success {
+border-left: 4px solid var(--success);
+}
+.notification.error {
+border-left: 4px solid var(--danger);
+}
+@media (max-width: 640px) {
+.notification {
+right: 1rem;
+left: 1rem;
+bottom: 1rem;
+}
+}
+html {
+scroll-behavior: smooth;
+}
+* {
+-webkit-tap-highlight-color: transparent;
+}
+</style>
+</head>
+<body class="dark">
+<div class="header">
+<div class="header-content">
+<div class="logo">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+<rect x="2" y="2" width="20" height="8" rx="2"/>
+<rect x="2" y="14" width="20" height="8" rx="2"/>
+<circle cx="6" cy="6" r="1" fill="currentColor"/>
+<circle cx="6" cy="18" r="1" fill="currentColor"/>
+<path d="M10 6h10M10 18h10"/>
+</svg>
+<span>ServerWatch Multi</span>
+</div>
+<button class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle theme">
+<svg class="sun" style="display: none;" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+<circle cx="12" cy="12" r="5"/>
+<line x1="12" y1="1" x2="12" y2="3"/>
+<line x1="12" y1="21" x2="12" y2="23"/>
+<line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
+<line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+<line x1="1" y1="12" x2="3" y2="12"/>
+<line x1="21" y1="12" x2="23" y2="12"/>
+<line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
+<line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+</svg>
+<svg class="moon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+</svg>
+</button>
+</div>
+</div>
+<div class="container">
+<div class="grid" id="serverGrid">
+</div>
+<div class="stats-bar">
+<div class="stat-item">
+<div class="stat-value" id="totalServers">0</div>
+<div class="stat-label">Server Total</div>
+</div>
+<div class="stat-item">
+<div class="stat-value" id="onlineServers">0</div>
+<div class="stat-label">Online</div>
+</div>
+<div class="stat-item">
+<div class="stat-value" id="offlineServers">0</div>
+<div class="stat-label">Offline</div>
+</div>
+<div class="stat-item">
+<div class="stat-value" id="connectedESPs">0</div>
+<div class="stat-label">ESPs Verbunden</div>
+</div>
+</div>
+</div>
+<div class="notification" id="notification"></div>
+<script>
+let ws;
+let servers = {};
+let darkMode = true;
+const icons = {
+power: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>',
+reset: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>',
+shutdown: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="8" y1="15" x2="16" y2="15"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>'
+};
+function toggleTheme() {
+darkMode = !darkMode;
+document.body.classList.toggle('light');
+document.querySelector('.sun').style.display = darkMode ? 'none' : 'block';
+document.querySelector('.moon').style.display = darkMode ? 'block' : 'none';
+localStorage.setItem('darkMode', darkMode);
+}
+function initTheme() {
+const saved = localStorage.getItem('darkMode');
+if (saved !== null) {
+darkMode = saved === 'true';
+}
+if (!darkMode) {
+document.body.classList.add('light');
+document.querySelector('.sun').style.display = 'block';
+document.querySelector('.moon').style.display = 'none';
+}
+}
+function connectWebSocket() {
+fetch('/api/wstoken')
+.then(response => response.ok ? response.json() : {})
+.catch(() => ({}))
+.then(data => {
+ws = new WebSocket(`ws://${window.location.hostname}:81/?t=${encodeURIComponent(data.token || '')}`);
+ws.onopen = () => {
+console.log('WebSocket connected');
+};
+ws.onmessage = (event) => {
+const data = JSON.parse(event.data);
+if (data.type === 'update') {
+updateServers(data.servers);
+}
+};
+ws.onclose = () => {
+console.log('WebSocket disconnected');
+setTimeout(connectWebSocket, 5000);
+};
+ws.onerror = (error) => {
+console.error('WebSocket error:', error);
+};
+});
+}
+function updateServers(serverData) {
+servers = serverData || {};
+renderServers();
+updateStats();
+}
+function renderServers() {
+const grid = document.getElementById('serverGrid');
+grid.replaceChildren();
+Object.keys(servers).forEach(id => {
+grid.appendChild(createServerCard(id, servers[id]));
+});
+}
+function el(tag, className, text) {
+const node = document.createElement(tag);
+if (className) node.className = className;
+if (text !== undefined) node.textContent = text;
+return node;
+}
+function infoRow(label, value) {
+const row = el('div', 'info-row');
+row.appendChild(el('span', 'info-label', label));
+row.appendChild(el('span', 'info-value', value));
+return row;
+}
+function actionButton(className, icon, label, id, action, disabled) {
+const btn = el('button', 'btn ' + className);
+btn.innerHTML = icons[icon];  // statisches Icon
+btn.appendChild(el('span', '', label));
+btn.disabled = disabled;
+btn.addEventListener('click', () => powerAction(id, action));
+return btn;
+}
+function formatAgo(ms) {
+const s = Math.round((ms || 0) / 1000);
+if (s < 120) return `${s} s`;
+if (s < 7200) return `${Math.round(s / 60)} min`;
+return `${Math.round(s / 3600)} h`;
+}
+function createServerCard(id, server) {
+const isLocal = server.isLocal === true;
+const reachable = server.espReachable !== false;
+const isOnline = reachable && server.serverOnline === true;
+const hasPower = reachable && server.serverPower === true;
+const card = el('div', 'card' + (isLocal ? ' local' : ''));
+const header = el('div', 'card-header');
+const title = el('div', 'card-title');
+title.appendChild(el('span', 'status-indicator ' + (!reachable ? 'warning' : isOnline ? 'online' : hasPower ? 'warning' : 'offline')));
+title.appendChild(el('span', '', server.serverName || 'Unbekannt'));
+header.appendChild(title);
+header.appendChild(el('span', 'badge ' + (isLocal ? 'local' : 'remote'), isLocal ? 'Lokal' : 'Remote'));
+card.appendChild(header);
+let status;
+if (!reachable) status = 'Unbekannt';
+else if (isOnline) status = 'Online';
+else if (hasPower) status = 'Strom vorhanden';
+else status = 'Offline';
+const info = el('div', 'info-grid');
+info.appendChild(infoRow('Server', server.serverIP ? server.serverIP + (server.serverPort ? ':' + server.serverPort : '') : '-'));
+info.appendChild(infoRow('ESP', server.espIP || '-'));
+info.appendChild(infoRow('Status', status));
+info.appendChild(infoRow('Ping', reachable && server.pingTime ? server.pingTime + ' ms' : '-'));
+info.appendChild(infoRow('ESP Status', reachable ? 'Erreichbar' : 'Nicht erreichbar seit ' + formatAgo(server.lastSeenAgo)));
+card.appendChild(info);
+const buttons = el('div', 'button-group');
+buttons.appendChild(actionButton('btn-primary', 'power', 'Starten', id, 'power', !reachable || isOnline));
+if (server.hasReset !== false) {
+buttons.appendChild(actionButton('btn-secondary', 'reset', 'Reset', id, 'reset', !reachable || !isOnline));
+}
+buttons.appendChild(actionButton('btn-danger', 'shutdown', 'Herunterfahren', id, 'shutdown', !reachable || !isOnline));
+card.appendChild(buttons);
+return card;
+}
+const actionNames = { power: 'Starten', reset: 'Reset', shutdown: 'Herunterfahren' };
+function powerAction(serverId, action) {
+if (!servers[serverId]) return;
+fetch('/control', {
+method: 'POST',
+headers: {
+'Content-Type': 'application/json'
+},
+body: JSON.stringify({
+target: serverId,
+action: action
+})
+})
+.then(response => response.json().catch(() => ({ success: false, error: 'HTTP ' + response.status })))
+.then(data => {
+if (data.success) {
+showNotification(`${actionNames[action] || action} wurde ausgeführt`, 'success');
+} else {
+showNotification(`Fehler: ${data.error || 'unbekannt'}`, 'error');
+}
+})
+.catch(error => {
+showNotification(`Verbindungsfehler: ${error}`, 'error');
+});
+}
+function updateStats() {
+let total = 0, online = 0, offline = 0, esps = 0;
+Object.values(servers).forEach(server => {
+total++;
+if (server.serverOnline && server.espReachable !== false) online++;
+else offline++;
+if (server.espReachable !== false) esps++;
+});
+document.getElementById('totalServers').textContent = total;
+document.getElementById('onlineServers').textContent = online;
+document.getElementById('offlineServers').textContent = offline;
+document.getElementById('connectedESPs').textContent = esps;
+}
+function showNotification(message, type = 'info') {
+const notification = document.getElementById('notification');
+notification.className = `notification ${type}`;
+notification.textContent = message;
+notification.classList.add('show');
+setTimeout(() => {
+notification.classList.remove('show');
+}, 3000);
+}
+function fetchStatus() {
+fetch('/api/status')
+.then(response => response.json())
+.then(data => {
+updateServers(data.servers || {});
+})
+.catch(error => {
+console.error('Error fetching status:', error);
+});
+}
+initTheme();
+connectWebSocket();
+fetchStatus();
+setInterval(fetchStatus, 5000);
+</script>
+</body>
+</html>
+)rawliteral";

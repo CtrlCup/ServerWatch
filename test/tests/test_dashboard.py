@@ -72,15 +72,13 @@ def test_dashboard_renders_cards_from_websocket_update(swarm, tmp_path):
     assert titles == ["Alpha", "Beta"], f"Nach WebSocket-Update gerendert: {titles}"
 
 
-@known_bug("dashboard-xss")
 def test_dashboard_escapes_remote_server_name(swarm, tmp_path):
-    """serverName eines (beliebigen, per mDNS auftauchenden) Geraets landet ungefiltert in
-    innerHTML -> Stored XSS im Dashboard, von dem aus alle Server geschaltet werden koennen."""
+    """Regression #7: serverName eines anderen Geraets darf nie als Markup eingefuegt werden."""
     evil = '<img src=x onerror="window.__xss=1">Evil'
     a, b = discovered_pair(swarm, name_b=evil)
     r = render(tmp_path, a)
     assert r["injectedElements"] == 0, "HTML aus serverName wurde als Markup eingefuegt"
-    assert any(c["title"] == evil for c in r["cards"]), [c["title"] for c in r["cards"]]
+    assert any(c["title"] == evil[:32] for c in r["cards"]), [c["title"] for c in r["cards"]]  # als Text, auf 32 Zeichen gekuerzt
 
 
 def rogue_status(**fields):
@@ -101,3 +99,31 @@ def test_dashboard_key_cannot_break_out_of_onclick(swarm, tmp_path):
     r = render(tmp_path, a, click=[".card .btn-primary"])
     assert r["xss"] is False, "Code aus der id wurde beim Klick ausgefuehrt"
     assert not remote_entry(a.status(), evil)[1], "ESP mit ungueltiger id wurde uebernommen"
+
+
+def test_dashboard_header_matches_source():
+    """Issue #21: dashboard_html.h wird aus serverwatch_Multi_interface.html erzeugt."""
+    r = subprocess.run(["python3", os.path.join(ROOT, "tools", "embed_html.py"), "--check"], capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_dashboard_marks_unreachable_remote(swarm, tmp_path):
+    """Issue #15: Ein ausgefallener ESP wird als nicht erreichbar gezeigt, Buttons sind gesperrt."""
+    a, b = discovered_pair(swarm)
+    b.kill()
+    assert swarm.wait_for(lambda: remote_entry(a.status(), b)[1]["espReachable"] is False, 30000)
+    r = render(tmp_path, a)
+    card = next(c for c in r["cards"] if c["title"] == "Beta")
+    assert any(i.startswith("ESP Status: Nicht erreichbar seit") for i in card["info"]), card["info"]
+    assert all(btn["disabled"] for btn in card["buttons"])
+
+
+def test_dashboard_shows_server_address_and_buttons(swarm, tmp_path):
+    swarm.set_server("refused")
+    a = swarm.add("Alpha", power=False)
+    swarm.wait_ready(a)
+    r = render(tmp_path, a)
+    (card,) = r["cards"]
+    assert "Server: 192.168.178.1:80" in card["info"]
+    texts = {b["text"]: b["disabled"] for b in card["buttons"]}
+    assert texts == {"Starten": False, "Reset": True, "Herunterfahren": True}

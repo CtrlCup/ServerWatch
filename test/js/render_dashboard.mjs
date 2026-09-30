@@ -52,6 +52,7 @@ const grid = w.document.getElementById("serverGrid");
 const cards = [...grid.querySelectorAll(".card")].map((c) => ({
   title: c.querySelector(".card-title")?.textContent.trim(),
   badge: c.querySelector(".badge")?.textContent.trim(),
+  info: [...c.querySelectorAll(".info-row")].map((r) => [...r.children].map((x) => x.textContent.trim()).join(": ")),
   buttons: [...c.querySelectorAll("button")].map((b) => ({
     text: b.textContent.trim(),
     disabled: b.disabled,

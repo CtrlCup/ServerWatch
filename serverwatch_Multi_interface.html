@@ -461,7 +461,7 @@
         let servers = {};
         let darkMode = true;
         
-        // Icons als SVG Strings
+        // Icons als SVG Strings (statisch, keine fremden Daten)
         const icons = {
             power: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>',
             reset: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>',
@@ -489,112 +489,128 @@
         }
         
         function connectWebSocket() {
-            ws = new WebSocket(`ws://${window.location.hostname}:81`);
-            
-            ws.onopen = () => {
-                console.log('WebSocket connected');
-                showNotification('Verbindung hergestellt', 'success');
-            };
-            
-            ws.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-                if (data.type === 'update') {
-                    updateServers(data.servers);
-                }
-            };
-            
-            ws.onclose = () => {
-                console.log('WebSocket disconnected');
-                showNotification('Verbindung verloren, versuche neu zu verbinden...', 'error');
-                setTimeout(connectWebSocket, 5000);
-            };
-            
-            ws.onerror = (error) => {
-                console.error('WebSocket error:', error);
-            };
+            // Token für den WebSocket holen (die Seite selbst ist per Login geschützt)
+            fetch('/api/wstoken')
+                .then(response => response.ok ? response.json() : {})
+                .catch(() => ({}))
+                .then(data => {
+                    ws = new WebSocket(`ws://${window.location.hostname}:81/?t=${encodeURIComponent(data.token || '')}`);
+                    
+                    ws.onopen = () => {
+                        console.log('WebSocket connected');
+                    };
+                    
+                    ws.onmessage = (event) => {
+                        const data = JSON.parse(event.data);
+                        if (data.type === 'update') {
+                            updateServers(data.servers);
+                        }
+                    };
+                    
+                    ws.onclose = () => {
+                        console.log('WebSocket disconnected');
+                        setTimeout(connectWebSocket, 5000);
+                    };
+                    
+                    ws.onerror = (error) => {
+                        console.error('WebSocket error:', error);
+                    };
+                });
         }
         
         function updateServers(serverData) {
-            servers = serverData;
+            servers = serverData || {};
             renderServers();
             updateStats();
         }
         
         function renderServers() {
             const grid = document.getElementById('serverGrid');
-            grid.innerHTML = '';
+            grid.replaceChildren();
             
             Object.keys(servers).forEach(id => {
-                const server = servers[id];
-                const card = createServerCard(id, server);
-                grid.appendChild(card);
+                grid.appendChild(createServerCard(id, servers[id]));
             });
         }
         
+        // Kleiner DOM-Helfer: fremde Daten landen ausschließlich in textContent (Issue #7)
+        function el(tag, className, text) {
+            const node = document.createElement(tag);
+            if (className) node.className = className;
+            if (text !== undefined) node.textContent = text;
+            return node;
+        }
+        
+        function infoRow(label, value) {
+            const row = el('div', 'info-row');
+            row.appendChild(el('span', 'info-label', label));
+            row.appendChild(el('span', 'info-value', value));
+            return row;
+        }
+        
+        function actionButton(className, icon, label, id, action, disabled) {
+            const btn = el('button', 'btn ' + className);
+            btn.innerHTML = icons[icon];  // statisches Icon
+            btn.appendChild(el('span', '', label));
+            btn.disabled = disabled;
+            btn.addEventListener('click', () => powerAction(id, action));
+            return btn;
+        }
+        
+        function formatAgo(ms) {
+            const s = Math.round((ms || 0) / 1000);
+            if (s < 120) return `${s} s`;
+            if (s < 7200) return `${Math.round(s / 60)} min`;
+            return `${Math.round(s / 3600)} h`;
+        }
+        
         function createServerCard(id, server) {
-            const isLocal = server.isLocal || false;
-            const isOnline = server.serverOnline || false;
-            const hasPower = server.serverPower || false;
+            const isLocal = server.isLocal === true;
+            const reachable = server.espReachable !== false;
+            const isOnline = reachable && server.serverOnline === true;
+            const hasPower = reachable && server.serverPower === true;
             
-            const card = document.createElement('div');
-            card.className = `card ${isLocal ? 'local' : ''}`;
+            const card = el('div', 'card' + (isLocal ? ' local' : ''));
             
-            card.innerHTML = `
-                <div class="card-header">
-                    <div class="card-title">
-                        <span class="status-indicator ${isOnline ? 'online' : (hasPower ? 'warning' : 'offline')}"></span>
-                        <span>${server.serverName || 'Unbekannt'}</span>
-                    </div>
-                    <span class="badge ${isLocal ? 'local' : 'remote'}">${isLocal ? 'Lokal' : 'Remote'}</span>
-                </div>
-                
-                <div class="info-grid">
-                    <div class="info-row">
-                        <span class="info-label">Server IP</span>
-                        <span class="info-value">${server.serverIP || '-'}</span>
-                    </div>
-                    <div class="info-row">
-                        <span class="info-label">ESP IP</span>
-                        <span class="info-value">${server.espIP || '-'}</span>
-                    </div>
-                    <div class="info-row">
-                        <span class="info-label">Status</span>
-                        <span class="info-value">${isOnline ? 'Online' : (hasPower ? 'Strom vorhanden' : 'Offline')}</span>
-                    </div>
-                    <div class="info-row">
-                        <span class="info-label">Ping</span>
-                        <span class="info-value">${server.pingTime ? server.pingTime + ' ms' : '-'}</span>
-                    </div>
-                    <div class="info-row">
-                        <span class="info-label">ESP Status</span>
-                        <span class="info-value">${server.espReachable !== false ? 'Erreichbar' : 'Nicht erreichbar'}</span>
-                    </div>
-                </div>
-                
-                <div class="button-group">
-                    <button class="btn btn-primary" onclick="powerAction('${id}', 'power')" ${isOnline ? 'disabled' : ''}>
-                        ${icons.power}
-                        <span>Starten</span>
-                    </button>
-                    <button class="btn btn-secondary" onclick="powerAction('${id}', 'reset')" ${!isOnline ? 'disabled' : ''}>
-                        ${icons.reset}
-                        <span>Reset</span>
-                    </button>
-                    <button class="btn btn-danger" onclick="powerAction('${id}', 'shutdown')" ${!isOnline ? 'disabled' : ''}>
-                        ${icons.shutdown}
-                        <span>Herunterfahren</span>
-                    </button>
-                </div>
-            `;
+            const header = el('div', 'card-header');
+            const title = el('div', 'card-title');
+            title.appendChild(el('span', 'status-indicator ' + (!reachable ? 'warning' : isOnline ? 'online' : hasPower ? 'warning' : 'offline')));
+            title.appendChild(el('span', '', server.serverName || 'Unbekannt'));
+            header.appendChild(title);
+            header.appendChild(el('span', 'badge ' + (isLocal ? 'local' : 'remote'), isLocal ? 'Lokal' : 'Remote'));
+            card.appendChild(header);
+            
+            let status;
+            if (!reachable) status = 'Unbekannt';
+            else if (isOnline) status = 'Online';
+            else if (hasPower) status = 'Strom vorhanden';
+            else status = 'Offline';
+            
+            const info = el('div', 'info-grid');
+            info.appendChild(infoRow('Server', server.serverIP ? server.serverIP + (server.serverPort ? ':' + server.serverPort : '') : '-'));
+            info.appendChild(infoRow('ESP', server.espIP || '-'));
+            info.appendChild(infoRow('Status', status));
+            info.appendChild(infoRow('Ping', reachable && server.pingTime ? server.pingTime + ' ms' : '-'));
+            info.appendChild(infoRow('ESP Status', reachable ? 'Erreichbar' : 'Nicht erreichbar seit ' + formatAgo(server.lastSeenAgo)));
+            card.appendChild(info);
+            
+            const buttons = el('div', 'button-group');
+            buttons.appendChild(actionButton('btn-primary', 'power', 'Starten', id, 'power', !reachable || isOnline));
+            if (server.hasReset !== false) {
+                buttons.appendChild(actionButton('btn-secondary', 'reset', 'Reset', id, 'reset', !reachable || !isOnline));
+            }
+            buttons.appendChild(actionButton('btn-danger', 'shutdown', 'Herunterfahren', id, 'shutdown', !reachable || !isOnline));
+            card.appendChild(buttons);
             
             return card;
         }
         
+        const actionNames = { power: 'Starten', reset: 'Reset', shutdown: 'Herunterfahren' };
+        
         function powerAction(serverId, action) {
-            const server = servers[serverId];
-            if (!server) return;
+            if (!servers[serverId]) return;
             
-            fetch(`/control`, {
+            fetch('/control', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -604,12 +620,12 @@
                     action: action
                 })
             })
-            .then(response => response.json())
+            .then(response => response.json().catch(() => ({ success: false, error: 'HTTP ' + response.status })))
             .then(data => {
                 if (data.success) {
-                    showNotification(`${action} wurde ausgeführt`, 'success');
+                    showNotification(`${actionNames[action] || action} wurde ausgeführt`, 'success');
                 } else {
-                    showNotification(`Fehler: ${data.error}`, 'error');
+                    showNotification(`Fehler: ${data.error || 'unbekannt'}`, 'error');
                 }
             })
             .catch(error => {
@@ -622,7 +638,7 @@
             
             Object.values(servers).forEach(server => {
                 total++;
-                if (server.serverOnline) online++;
+                if (server.serverOnline && server.espReachable !== false) online++;
                 else offline++;
                 if (server.espReachable !== false) esps++;
             });
