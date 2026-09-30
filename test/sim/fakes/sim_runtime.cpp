@@ -22,6 +22,7 @@
 #include "esp_task_wdt.h"
 
 #include <algorithm>
+#include <random>
 #include <arpa/inet.h>
 #include <atomic>
 #include <cerrno>
@@ -189,6 +190,10 @@ void delay(unsigned long ms) { sim::sleep_sim_ms((double)ms); }
 void delayMicroseconds(unsigned int us) { sim::sleep_sim_ms(us / 1000.0); }
 void yield() { std::this_thread::yield(); }
 long random(long max) { return max > 0 ? rand() % max : 0; }
+uint32_t esp_random() {
+    static std::mt19937 rng(std::random_device{}());
+    return rng();
+}
 long random(long min, long max) { return max > min ? min + rand() % (max - min) : min; }
 void randomSeed(unsigned long s) { srand((unsigned)s); }
 
@@ -890,16 +895,27 @@ bool WebServer::hasArg(const String& name) const {
     for (auto& a : args_) if (a.first == name.std()) return true;
     return false;
 }
+// Wie arduino-esp32: header()/hasHeader() liefern nur per collectHeaders() angemeldete Header
+// (plus Authorization); hasHeader() nur bei nicht-leerem Wert.
+bool WebServer::collected(const std::string& name) const {
+    std::string n = sim::lower(name);
+    if (n == "authorization") return true;
+    for (auto& k : collect_) if (sim::lower(k) == n) return true;
+    return false;
+}
 String WebServer::header(const String& name) const {
+    if (!collected(name.std())) return String();
     for (auto& h : headers_) if (sim::lower(h.first) == sim::lower(name.std())) return String(h.second);
     return String();
 }
-bool WebServer::hasHeader(const String& name) const {
-    for (auto& h : headers_) if (sim::lower(h.first) == sim::lower(name.std())) return true;
-    return false;
+bool WebServer::hasHeader(const String& name) const { return header(name).length() > 0; }
+String WebServer::hostHeader() const {
+    for (auto& h : headers_) if (sim::lower(h.first) == "host") return String(h.second);
+    return String();
 }
 bool WebServer::authenticate(const char* user, const char* pass) {
-    std::string h = header("Authorization").std();
+    std::string h;
+    for (auto& hd : headers_) if (sim::lower(hd.first) == "authorization") h = hd.second;
     if (h.rfind("Basic ", 0) != 0) return false;
     return sim::b64dec(h.substr(6)) == std::string(user) + ":" + pass;
 }
@@ -1204,12 +1220,21 @@ void WebSocketsServer::handleHeader(uint8_t num) {
         if (k == "upgrade" && sim::lower(v) == "websocket") upgrade = true;
     }
     if (validate_) {
+        // Wie links2004/WebSockets: Connection, Upgrade, Sec-WebSocket-*, Authorization (und die
+        // Request-Zeile) wertet die Library selbst aus; alle uebrigen (auch Host) gehen an den Validator.
+        static const char* builtin[] = {"connection", "upgrade", "sec-websocket-version", "sec-websocket-key",
+                                        "sec-websocket-protocol", "sec-websocket-extensions", "authorization"};
+        bool valid = true;
         for (auto& h : hdrs) {
-            if (!validate_(String(h.first), String(h.second))) {
-                sim::send_all(c.fd, "HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n", 1000);
-                dropClient(num, false);
-                return;
-            }
+            std::string k = sim::lower(h.first);
+            bool isBuiltin = false;
+            for (auto b : builtin) if (k == b) isBuiltin = true;
+            if (!isBuiltin) valid &= validate_(String(h.first), String(h.second));
+        }
+        if (!valid) {
+            sim::send_all(c.fd, "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n", 1000);
+            dropClient(num, false);
+            return;
         }
     }
     if (!upgrade || key.empty()) {

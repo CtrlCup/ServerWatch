@@ -23,6 +23,17 @@ POWER_BUTTON_PIN = 3
 RESET_BUTTON_PIN = 5
 SERVER_IP = "192.168.178.1"
 
+# Zugangsdaten der Test-Knoten (per SWCFG_* gesetzt, siehe Swarm.add)
+WEB_USER = "admin"
+WEB_PASSWORD = "test-password"
+SWARM_KEY = "test-swarm-key-0123456789"
+
+
+def hmac_hex(key, msg):
+    import hashlib
+    import hmac
+    return hmac.new(key.encode(), msg.encode(), hashlib.sha256).hexdigest()
+
 
 class Node:
     def __init__(self, swarm, ip, sketch, name, env):
@@ -122,6 +133,8 @@ class Node:
         return f"http://{self.ip}:{port + self.swarm.port_offset}{path}"
 
     def request(self, method, path, timeout_ms=4000, **kw):
+        """HTTP-Anfrage; standardmaessig mit den Web-Zugangsdaten (auth=None fuer ohne)."""
+        kw.setdefault("auth", (self.env.get("SWCFG_webUser", WEB_USER), self.env.get("SWCFG_webPassword", WEB_PASSWORD)))
         return requests.request(method, self.url(path), timeout=self.swarm.real_s(timeout_ms), **kw)
 
     def get(self, path, timeout_ms=4000, **kw):
@@ -133,9 +146,26 @@ class Node:
     def status(self, timeout_ms=4000):
         return self.get("/api/status", timeout_ms).json()["servers"]
 
-    def websocket(self, timeout_ms=4000, **kw):
+    def ws_token(self):
+        r = self.get("/api/wstoken")
+        return r.json().get("token", "") if r.ok else ""
+
+    def websocket(self, timeout_ms=4000, path=None, **kw):
+        """WebSocket zum Knoten; ohne path mit gueltigem Token (?t=...)."""
         from websockets.sync.client import connect
-        return connect(f"ws://{self.ip}:{81 + self.swarm.port_offset}/", open_timeout=self.swarm.real_s(timeout_ms), **kw)
+        if path is None:
+            path = "/?t=" + self.ws_token()
+        return connect(f"ws://{self.ip}:{81 + self.swarm.port_offset}{path}", open_timeout=self.swarm.real_s(timeout_ms), **kw)
+
+    def node_id(self):
+        return self.status()["local"]["id"]
+
+    def signed_control(self, action, key=SWARM_KEY, target_id=None, nonce=None, timeout_ms=8000):
+        """ESP-zu-ESP-Befehl wie ein anderer Knoten: Nonce holen, HMAC bilden, POST /api/control."""
+        if nonce is None:
+            nonce = self.get("/api/nonce", auth=None).json()["nonce"]
+        sig = hmac_hex(key, f"ctl|{target_id or self.node_id()}|{nonce}|{action}")
+        return self.post("/api/control", auth=None, json={"action": action, "nonce": nonce, "sig": sig}, timeout_ms=timeout_ms)
 
 
 class RogueNode:
@@ -229,8 +259,14 @@ class Swarm:
         e = dict(env or {})
         key = "SWCFG_serverName" if sketch == "ServerWatch_Multi" else "SWCFG_nodeName"
         e.setdefault(key, name)
+        e.setdefault("SWCFG_webUser", WEB_USER)
+        e.setdefault("SWCFG_webPassword", WEB_PASSWORD)
+        e.setdefault("SWCFG_swarmKey", SWARM_KEY)
         for k, v in (cfg or {}).items():
-            e["SWCFG_" + k] = v
+            if v is None:
+                e.pop("SWCFG_" + k, None)  # Standardwert aus dem Sketch verwenden
+            else:
+                e["SWCFG_" + k] = v
         node = Node(self, ip, sketch, name, e)
         node.set_power(power)
         node.set_ap(ap_up)

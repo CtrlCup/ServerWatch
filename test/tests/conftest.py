@@ -12,10 +12,6 @@ from simnet import ROOT, Swarm  # noqa: E402
 # Ist ein Fehler behoben, schlaegt der Test mit XPASS fehl -> Eintrag hier und den
 # Marker am Test entfernen. Schluessel -> Issue-Nummer auf GitHub (CtrlCup/ServerWatch).
 KNOWN_BUGS = {
-    "no-auth": 8,
-    "csrf": 9,
-    "no-node-auth": 10,
-    "ws-origin": 18,
 }
 
 

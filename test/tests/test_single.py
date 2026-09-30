@@ -36,7 +36,7 @@ def test_single_page_contains_config(swarm):
 def test_single_poweron_presses_button(swarm):
     swarm.set_server("refused")  # Server aus: Starten ist erlaubt
     n = solo(swarm, power=False)
-    r = n.get("/poweron", timeout_ms=5000)
+    r = n.post("/poweron", json={}, timeout_ms=5000)
     assert r.json() == {"success": True}
     (start, dur), = n.pulses(POWER_BUTTON_PIN)
     assert 700 <= dur <= 1500

@@ -24,8 +24,8 @@ Thumbs.db
 # Logs
 *.log
 
-# Personal configuration (optional - wenn du sensible Daten nicht commiten willst)
-# Serverwatch.ino
+# Zugangsdaten (Vorlage: secrets.example.h)
+secrets.h
 
 # Temporary files
 *.bak

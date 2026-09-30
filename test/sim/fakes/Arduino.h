@@ -208,6 +208,7 @@ void digitalWrite(uint8_t pin, uint8_t val);
 int digitalRead(uint8_t pin);
 int analogRead(uint8_t pin);
 long random(long max);
+uint32_t esp_random();
 long random(long min, long max);
 void randomSeed(unsigned long);
 

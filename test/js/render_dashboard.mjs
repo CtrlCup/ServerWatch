@@ -61,6 +61,7 @@ const cards = [...grid.querySelectorAll(".card")].map((c) => ({
 }));
 const result = {
   cards,
+  banner: w.document.getElementById("banner")?.hidden ? "" : (w.document.getElementById("banner")?.textContent || ""),
   injectedElements: grid.querySelectorAll("img, script, iframe, svg[onload], [onerror], [onload]").length,
   xss: w.__xss === 1,
   fetchCalls,

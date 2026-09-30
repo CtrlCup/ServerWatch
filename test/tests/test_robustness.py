@@ -140,10 +140,11 @@ def test_websocket_accepts_new_client_when_stale_clients_exist(swarm):
     a = swarm.add("Alpha")
     swarm.wait_ready(a)
     zombies = []
+    token = a.ws_token()
     for _ in range(5):
         s = socket.create_connection((a.ip, 81 + swarm.port_offset))
-        s.sendall(b"GET / HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
-                  b"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n")
+        s.sendall(f"GET /?t={token} HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                  "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n".encode())
         zombies.append(s)  # liest nie, antwortet nie auf Pings
     swarm.sleep(3000)
 

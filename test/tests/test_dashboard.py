@@ -127,3 +127,17 @@ def test_dashboard_shows_server_address_and_buttons(swarm, tmp_path):
     assert "Server: 192.168.178.1:80" in card["info"]
     texts = {b["text"]: b["disabled"] for b in card["buttons"]}
     assert texts == {"Starten": False, "Reset": True, "Herunterfahren": True}
+
+
+def test_dashboard_warns_about_default_credentials_and_disabled_swarm(swarm, tmp_path):
+    a = swarm.add("Alpha", cfg={"webUser": None, "webPassword": None, "swarmKey": None})
+    a.env["SWCFG_webPassword"] = "serverwatch"  # Standard-Zugangsdaten fuer die Anfragen des Tests
+    swarm.wait_ready(a)
+    r = render(tmp_path, a)
+    assert "Standard-Passwort" in r["banner"] and "Schwarm deaktiviert" in r["banner"]
+
+
+def test_dashboard_has_no_banner_when_configured(swarm, tmp_path):
+    a = swarm.add("Alpha")
+    swarm.wait_ready(a)
+    assert render(tmp_path, a)["banner"] == ""

@@ -4,9 +4,26 @@
 #include <esp_task_wdt.h>
 #include <esp_idf_version.h>
 
-// WiFi Zugangsdaten
-const char* ssid = "DEIN_WLAN_NAME";      // Wlan SSID muss gesetzt werden
-const char* password = "DEIN_WLAN_PASSWORT";      // Wlan Passwort muss gesetzt werden
+// Zugangsdaten stehen in secrets.h (Vorlage: secrets.example.h), nicht im Sketch (Issue #20)
+#if __has_include("secrets.h")
+#include "secrets.h"
+#endif
+#ifndef WIFI_SSID
+#define WIFI_SSID "DEIN_WLAN_NAME"
+#endif
+#ifndef WIFI_PASSWORD
+#define WIFI_PASSWORD "DEIN_WLAN_PASSWORT"
+#endif
+#ifndef WEB_USER
+#define WEB_USER "admin"
+#endif
+#ifndef WEB_PASSWORD
+#define WEB_PASSWORD "serverwatch"        // Standard-Passwort: bitte in secrets.h ändern
+#endif
+const char* ssid = WIFI_SSID;
+const char* password = WIFI_PASSWORD;
+const char* webUser = WEB_USER;
+const char* webPassword = WEB_PASSWORD;
 
 // Server Name
 const char* nodeName = "Heimserver";      // Name deines Servers
@@ -23,7 +40,7 @@ const bool usePowerSense = true; // false, wenn POWER_CHECK_PIN nicht mit dem Ma
 // Zeiteinstellungen
 int onTime = 800; // Zeit wie lange der Ausgang bestromt werden soll in Millisekunden
 
-const char* firmwareVersion = "1.0.10";
+const char* firmwareVersion = "1.0.11";
 
 WebServer server(80);
 
@@ -38,6 +55,7 @@ const int watchdogTimeoutS = 15;                  // Neustart, wenn loop() so la
 const unsigned long wifiRestartTimeout = 300000;  // Neustart, wenn WLAN so lange (ms) getrennt bleibt
 const unsigned long wifiBootTimeout = 20000;      // So lange (ms) wartet setup() auf das WLAN
 bool wifiLost = false;
+String espHostname;
 unsigned long wifiLostSince = 0;
 
 
@@ -242,10 +260,10 @@ const char htmlPage[] PROGMEM = R"rawliteral(
             btn.disabled = true;
             btn.textContent = 'Starte...';
             
-            fetch('/poweron')
+            fetch('/poweron', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'})
                 .then(r => r.json())
                 .then(data => {
-                    btn.textContent = data.success ? 'Gestartet!' : 'Fehler!';
+                    btn.textContent = data.success ? 'Gestartet!' : (data.error || 'Fehler!');
                     setTimeout(() => {
                         btn.disabled = false;
                         btn.textContent = 'Server Starten';
@@ -261,7 +279,80 @@ const char htmlPage[] PROGMEM = R"rawliteral(
 </html>
 )rawliteral";
 
+// ================= Sicherheit (Issues #8, #9) =================
+
+void sendError(int code, const char* message) {
+  server.send(code, "application/json", String("{\"success\":false,\"error\":\"") + message + "\"}");
+}
+
+// Ist host (ggf. mit Port) eine Adresse dieses ESP? Schutz gegen DNS-Rebinding.
+bool isOwnHost(String host) {
+  host.toLowerCase();
+  int colon = host.indexOf(':');
+  if (colon >= 0) host = host.substring(0, colon);
+  if (host.length() == 0) return false;
+  if (host == WiFi.localIP().toString()) return true;
+  String own = espHostname;
+  own.toLowerCase();
+  return host == own || host.startsWith(own + ".");
+}
+
+// Origin leer (kein Browser) oder eigene Adresse
+bool isAllowedOrigin(const String& origin) {
+  if (origin.length() == 0) return true;
+  if (!origin.startsWith("http://")) return false;
+  String host = origin.substring(7);
+  if (host.indexOf('/') >= 0) return false;
+  return isOwnHost(host);
+}
+
+// Bremse gegen Durchprobieren von Passwörtern: 1 s Sperre pro IP nach Fehlversuch
+uint32_t failedLoginIp[8] = {};
+unsigned long failedLoginAt[8] = {};
+int failedLoginNext = 0;
+
+// Host prüfen und Login verlangen (HTTP Basic Auth)
+bool requireAuth() {
+  if (!isOwnHost(server.hostHeader())) {
+    sendError(403, "Unbekannter Host");
+    return false;
+  }
+  uint32_t ip = (uint32_t)server.client().remoteIP();
+  for (int i = 0; i < 8; i++) {
+    if (failedLoginIp[i] == ip && failedLoginAt[i] != 0 && millis() - failedLoginAt[i] < 1000) {
+      sendError(429, "Zu viele Fehlversuche, bitte kurz warten");
+      return false;
+    }
+  }
+  if (server.authenticate(webUser, webPassword)) return true;
+  if (server.hasHeader("Authorization")) {
+    failedLoginIp[failedLoginNext] = ip;
+    failedLoginAt[failedLoginNext] = millis() | 1;
+    failedLoginNext = (failedLoginNext + 1) % 8;
+  }
+  server.requestAuthentication(BASIC_AUTH, "ServerWatch");
+  return false;
+}
+
+// Schreibende Anfragen: nur JSON und nur von der eigenen Seite (CSRF)
+bool checkJsonWrite() {
+  String contentType = server.header("Content-Type");
+  contentType.toLowerCase();
+  if (!contentType.startsWith("application/json")) {
+    sendError(415, "Content-Type application/json erforderlich");
+    return false;
+  }
+  if (!isAllowedOrigin(server.header("Origin"))) {
+    sendError(403, "Fremder Origin");
+    return false;
+  }
+  return true;
+}
+
+// ================= Ende Sicherheit =================
+
 void handleRoot() {
+  if (!requireAuth()) return;
   String html = String(htmlPage);
   html.replace("%NODE_NAME%", nodeName);
   html.replace("%SERVER_IP%", serverIP);
@@ -271,6 +362,7 @@ void handleRoot() {
 }
 
 void handleStatus() {
+  if (!requireAuth()) return;
   // Nur die im loop() ermittelten Werte ausliefern, nicht pro Anfrage verbinden (Issue #1)
   bool reachable = lastServerStatus;
   bool powerOk = lastPowerStatus;
@@ -285,6 +377,7 @@ void handleStatus() {
 }
 
 void handlePowerOn() {
+  if (!requireAuth() || !checkJsonWrite()) return;
   // Kein Power-Druck bei laufendem Server: das würde ihn herunterfahren (Issue #11)
   if (lastServerStatus || lastPowerStatus) {
     server.send(409, "application/json", "{\"success\":false,\"error\":\"Server läuft bereits\"}");
@@ -316,8 +409,8 @@ void setup() {
   Serial.println(lastPowerStatus ? "HIGH (Spannung erkannt)" : "LOW (Keine Spannung)");
   
   Serial.print("Verbinde mit WiFi");
-  String hostName = "ServerWatch-" + String(nodeName);
-  WiFi.setHostname(hostName.c_str());
+  espHostname = "ServerWatch-" + String(nodeName);
+  WiFi.setHostname(espHostname.c_str());
   
   // Stellt sicher, dass das WiFi-Modul nicht in den Schlafmodus geht (wichtig für Fritzboxen)
   WiFi.setSleep(false);
@@ -344,9 +437,12 @@ void setup() {
   
   server.on("/", handleRoot);
   server.on("/status", handleStatus);
-  server.on("/poweron", handlePowerOn);
+  server.on("/poweron", HTTP_POST, handlePowerOn);  // nur POST: kein Auslösen per Link/<img> (Issue #9)
   
+  const char* headerKeys[] = {"Content-Type", "Origin"};
+  server.collectHeaders(headerKeys, 2);
   server.begin();
+  if (strcmp(webPassword, "serverwatch") == 0) Serial.println("WARNUNG: Standard-Passwort aktiv - WEB_PASSWORD in secrets.h setzen");
   Serial.println("Webserver gestartet!");
 
   // Watchdog: startet den ESP neu, wenn loop() hängt (Issue #4)

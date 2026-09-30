@@ -305,6 +305,16 @@ animation: spin 1s linear infinite;
 @keyframes spin {
 to { transform: rotate(360deg); }
 }
+.banner {
+max-width: 1400px;
+margin: 1rem auto 0;
+padding: 0.75rem 1rem;
+border-radius: 12px;
+border: 1px solid var(--warning);
+background: rgba(245, 158, 11, 0.12);
+color: var(--text-primary);
+font-size: 0.875rem;
+}
 .notification {
 position: fixed;
 bottom: 2rem;
@@ -374,6 +384,7 @@ scroll-behavior: smooth;
 </button>
 </div>
 </div>
+<div class="banner" id="banner" hidden></div>
 <div class="container">
 <div class="grid" id="serverGrid">
 </div>
@@ -437,6 +448,7 @@ ws.onmessage = (event) => {
 const data = JSON.parse(event.data);
 if (data.type === 'update') {
 updateServers(data.servers);
+updateBanner(data);
 }
 };
 ws.onclose = () => {
@@ -545,6 +557,14 @@ showNotification(`Fehler: ${data.error || 'unbekannt'}`, 'error');
 showNotification(`Verbindungsfehler: ${error}`, 'error');
 });
 }
+function updateBanner(data) {
+const hints = [];
+if (data.defaultCredentials) hints.push('Standard-Passwort aktiv: WEB_PASSWORD in secrets.h setzen.');
+if (data.swarmEnabled === false) hints.push('Schwarm deaktiviert: SWARM_KEY (mind. 16 Zeichen) in secrets.h setzen.');
+const banner = document.getElementById('banner');
+banner.textContent = hints.join(' ');
+banner.hidden = hints.length === 0;
+}
 function updateStats() {
 let total = 0, online = 0, offline = 0, esps = 0;
 Object.values(servers).forEach(server => {
@@ -572,6 +592,7 @@ fetch('/api/status')
 .then(response => response.json())
 .then(data => {
 updateServers(data.servers || {});
+updateBanner(data);
 })
 .catch(error => {
 console.error('Error fetching status:', error);

@@ -49,9 +49,10 @@ public:
     bool hasArg(const String& name) const;
     String header(const String& name) const;
     bool hasHeader(const String& name) const;
+    String header(int i) const { return i < (int)headers_.size() ? String(headers_[i].second) : String(); }
     int headers() const { return (int)headers_.size(); }
-    void collectHeaders(const char* [], size_t) {}
-    String hostHeader() const { return header("Host"); }
+    void collectHeaders(const char* keys[], size_t count) { collect_.assign(keys, keys + count); }
+    String hostHeader() const;
     SimRemoteClient& client() { return client_; }
 
     bool authenticate(const char* user, const char* pass);
@@ -72,6 +73,8 @@ public:
 private:
     struct Route { String uri; HTTPMethod method; THandlerFunction fn; };
     bool readRequest(int fd);
+    bool collected(const std::string& name) const;
+    std::vector<std::string> collect_;
     void flushResponse(int fd);
 
     int port_;

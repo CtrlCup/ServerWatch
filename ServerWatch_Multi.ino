@@ -10,14 +10,36 @@
 #include <vector>
 #include <map>
 #include <algorithm>
+#include <mbedtls/md.h>
 
 // ========================================
 // KONFIGURATIONSVARIABLEN - BITTE ANPASSEN
 // ========================================
 
-// WiFi Zugangsdaten
-const char* ssid = "DEIN_WLAN_NAME";              // WLAN SSID eintragen
-const char* password = "DEIN_WLAN_PASSWORT";      // WLAN Passwort eintragen
+// Zugangsdaten stehen in secrets.h (Vorlage: secrets.example.h), nicht im Sketch (Issue #20)
+#if __has_include("secrets.h")
+#include "secrets.h"
+#endif
+#ifndef WIFI_SSID
+#define WIFI_SSID "DEIN_WLAN_NAME"
+#endif
+#ifndef WIFI_PASSWORD
+#define WIFI_PASSWORD "DEIN_WLAN_PASSWORT"
+#endif
+#ifndef WEB_USER
+#define WEB_USER "admin"
+#endif
+#ifndef WEB_PASSWORD
+#define WEB_PASSWORD "serverwatch"                // Standard-Passwort: das Dashboard warnt davor
+#endif
+#ifndef SWARM_KEY
+#define SWARM_KEY ""                              // leer = Schwarm deaktiviert
+#endif
+const char* ssid = WIFI_SSID;
+const char* password = WIFI_PASSWORD;
+const char* webUser = WEB_USER;
+const char* webPassword = WEB_PASSWORD;
+const char* swarmKey = SWARM_KEY;
 
 // Server Konfiguration
 const char* serverName = "Heimserver";            // Name deines Servers
@@ -47,7 +69,7 @@ const char* mdnsServiceName = "serverwatch";      // mDNS Service Name für Auto
 // ENDE DER KONFIGURATIONSVARIABLEN
 // ========================================
 
-const char* firmwareVersion = "1.0.10";
+const char* firmwareVersion = "1.0.11";
 
 // Webserver und WebSocket
 WebServer server(80);
@@ -96,6 +118,10 @@ volatile bool localPowerStatus = false;
 volatile int localPingTime = 0;
 String espHostname;
 String nodeId;                                    // eindeutige ID dieses ESP (MAC ohne Doppelpunkte)
+String wsToken;                                   // Zugangstoken für den WebSocket, neu bei jedem Boot
+bool wsAuthed[WEBSOCKETS_SERVER_CLIENT_MAX] = {false};
+bool swarmEnabled = false;                        // nur mit eigenem SWARM_KEY (Issue #10)
+bool defaultCredentials = false;
 const unsigned long remoteForgetTimeout = 86400000;  // nicht erreichbare ESPs nach 24 h vergessen
 
 // HTML-Oberfläche: erzeugt aus serverwatch_Multi_interface.html (tools/embed_html.py, Issue #21)
@@ -192,6 +218,10 @@ void setupMDNS() {
         return;
     }
     
+    if (!swarmEnabled) {
+        Serial.println("Schwarm deaktiviert: SWARM_KEY (mind. 16 Zeichen) in secrets.h setzen");
+        return;
+    }
     // Service advertisen
     MDNS.addService(mdnsServiceName, "tcp", 80);
     MDNS.addServiceTxt(mdnsServiceName, "tcp", "server", serverName);
@@ -240,15 +270,30 @@ bool isValidNodeId(const String& id) {
 
 // Status eines anderen ESP per HTTP abfragen
 bool fetchRemoteStatus(const String& ip, RemoteESP& esp) {
+    // Challenge-Response: die Antwort muss mit dem Schwarm-Schlüssel signiert sein (Issue #10)
+    String challenge = randomHex(16);
     HTTPClient http;
-    http.begin("http://" + ip + "/api/localstatus");
+    http.begin("http://" + ip + "/api/localstatus?c=" + challenge);
     http.setConnectTimeout(1000);
     http.setTimeout(2000);
     int httpCode = http.GET();
     bool ok = false;
+    String payload;
     if (httpCode == 200) {
+        DynamicJsonDocument envelope(1536);
+        if (deserializeJson(envelope, http.getString()) == DeserializationError::Ok) {
+            String signedPayload = envelope["payload"] | "";
+            String sig = envelope["sig"] | "";
+            if (signedPayload.length() > 0 && constantTimeEquals(sig, hmacHex("st|" + challenge + "|" + signedPayload))) {
+                payload = signedPayload;
+            }
+        }
+    }
+    http.end();
+    if (payload.length() > 0) {
         DynamicJsonDocument doc(1024);
-        if (deserializeJson(doc, http.getString()) == DeserializationError::Ok && doc["id"].is<const char*>()) {
+        // Die signierte Antwort muss die angefragte IP nennen, sonst leitet jemand nur weiter (Relay)
+        if (deserializeJson(doc, payload) == DeserializationError::Ok && doc["id"].is<const char*>() && ip == (doc["ip"] | "")) {
             esp.id = sanitizeText(doc["id"].as<String>(), 16);
             esp.hostname = sanitizeText(doc["hostname"] | "", 63);
             esp.ip = ip;
@@ -266,7 +311,6 @@ bool fetchRemoteStatus(const String& ip, RemoteESP& esp) {
             ok = isValidNodeId(esp.id);
         }
     }
-    http.end();
     return ok;
 }
 
@@ -323,6 +367,8 @@ void scanForESPs() {
 String getStatusJson(const char* type) {
     DynamicJsonDocument doc(8192);
     if (type) doc["type"] = type;
+    doc["defaultCredentials"] = defaultCredentials;
+    doc["swarmEnabled"] = swarmEnabled;
     JsonObject servers = doc.createNestedObject("servers");
     
     // Lokaler Server
@@ -373,16 +419,38 @@ String getStatusJson(const char* type) {
     return output;
 }
 
+// Wert des Query-Parameters t aus einer URL wie "/?t=abc" (exakter Parametername)
+String wsTokenFromUrl(const String& url) {
+    int query = url.indexOf('?');
+    if (query < 0) return "";
+    String rest = url.substring(query + 1);
+    while (rest.length() > 0) {
+        int amp = rest.indexOf('&');
+        String param = amp < 0 ? rest : rest.substring(0, amp);
+        if (param.startsWith("t=")) return param.substring(2);
+        rest = amp < 0 ? "" : rest.substring(amp + 1);
+    }
+    return "";
+}
+
 // WebSocket Event Handler
 void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
     switch(type) {
         case WStype_DISCONNECTED:
+            wsAuthed[num] = false;
             Serial.printf("WebSocket Client [%u] getrennt\n", num);
             break;
             
         case WStype_CONNECTED:
             {
                 IPAddress ip = webSocket.remoteIP(num);
+                // Token aus der URL (?t=...) prüfen, bevor irgendetwas gesendet wird (Issue #8)
+                if (!constantTimeEquals(wsTokenFromUrl(String((const char*)payload).substring(0, length)), wsToken)) {
+                    Serial.printf("WebSocket Client [%u] ohne gültigen Token abgewiesen\n", num);
+                    webSocket.disconnect(num);
+                    break;
+                }
+                wsAuthed[num] = true;
                 Serial.printf("WebSocket Client [%u] verbunden von %s\n", num, ip.toString().c_str());
                 
                 // Status senden bei Verbindung
@@ -392,15 +460,16 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
             break;
             
         case WStype_TEXT:
-            Serial.printf("WebSocket Text von [%u]: %s\n", num, payload);
-            break;
+            break;  // der Server erwartet keine Nachrichten von Clients
     }
 }
 
 // Status an alle WebSocket Clients senden
 void sendStatusToClients() {
     String json = getStatusJson("update");
-    webSocket.broadcastTXT(json);
+    for (uint8_t num = 0; num < WEBSOCKETS_SERVER_CLIENT_MAX; num++) {
+        if (wsAuthed[num]) webSocket.sendTXT(num, json);  // nur an Clients mit gültigem Token
+    }
 }
 
 // Taster nicht-blockierend drücken: Pin HIGH, loop() lässt nach Ablauf wieder los
@@ -458,8 +527,25 @@ ActionResult forwardRemoteAction(const String& target, const String& action) {
     xSemaphoreGive(remoteMutex);
     if (remoteIP.length() == 0) return {404, "Unbekanntes Ziel: " + target};
 
-    DynamicJsonDocument request(256);
+    // Einmal-Nonce beim Ziel holen und den Befehl an Ziel-ID, Nonce und Aktion gebunden signieren
+    String nonce;
+    {
+        HTTPClient http;
+        http.begin("http://" + remoteIP + "/api/nonce");
+        http.setConnectTimeout(1000);
+        http.setTimeout(2000);
+        if (http.GET() == 200) {
+            DynamicJsonDocument doc(256);
+            if (deserializeJson(doc, http.getString()) == DeserializationError::Ok) nonce = doc["nonce"] | "";
+        }
+        http.end();
+    }
+    if (!isLowerHex(nonce, 32)) return {504, "ESP nicht erreichbar"};
+
+    DynamicJsonDocument request(512);
     request["action"] = action;
+    request["nonce"] = nonce;
+    request["sig"] = hmacHex("ctl|" + target + "|" + nonce + "|" + action);
     String payload;
     serializeJson(request, payload);
 
@@ -484,7 +570,8 @@ ActionResult forwardRemoteAction(const String& target, const String& action) {
 
 // JSON-Body eines Requests lesen; bei Fehler wird direkt 400 gesendet
 bool readJsonBody(DynamicJsonDocument& doc) {
-    if (!server.hasArg("plain") || deserializeJson(doc, server.arg("plain")) != DeserializationError::Ok || !doc.is<JsonObject>()) {
+    if (!server.hasArg("plain") || deserializeJson(doc, server.arg("plain")) != DeserializationError::Ok || !doc.is<JsonObject>() ||
+        (doc.containsKey("action") && !doc["action"].is<const char*>()) || (doc.containsKey("target") && !doc["target"].is<const char*>())) {
         server.send(400, "application/json", "{\"success\":false,\"error\":\"Ungültiges JSON\"}");
         return false;
     }
@@ -500,19 +587,195 @@ void sendActionResult(const ActionResult& result) {
     server.send(result.code, "application/json", output);
 }
 
+// ================= Sicherheit (Issues #8, #9, #10, #18) =================
+
+// Zufällige Hex-Zeichenkette aus dem Hardware-Zufallsgenerator
+String randomHex(int bytes) {
+    String out;
+    char buf[3];
+    for (int i = 0; i < bytes; i++) {
+        snprintf(buf, sizeof buf, "%02x", (unsigned int)(esp_random() & 0xff));
+        out += buf;
+    }
+    return out;
+}
+
+// Genau len Zeichen, nur 0-9 und a-f
+bool isLowerHex(const String& text, unsigned int len) {
+    if (text.length() != len) return false;
+    for (unsigned int i = 0; i < len; i++) {
+        char c = text[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+    }
+    return true;
+}
+
+bool constantTimeEquals(const String& a, const String& b) {
+    if (a.length() != b.length()) return false;
+    unsigned char diff = 0;
+    for (unsigned int i = 0; i < a.length(); i++) diff |= a[i] ^ b[i];
+    return diff == 0;
+}
+
+// HMAC-SHA256 mit dem Schwarm-Schlüssel, als Hex
+String hmacHex(const String& message) {
+    unsigned char mac[32];
+    mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), (const unsigned char*)swarmKey, strlen(swarmKey),
+                    (const unsigned char*)message.c_str(), message.length(), mac);
+    String out;
+    char buf[3];
+    for (int i = 0; i < 32; i++) {
+        snprintf(buf, sizeof buf, "%02x", mac[i]);
+        out += buf;
+    }
+    return out;
+}
+
+// Ist host (ggf. mit Port) eine Adresse dieses ESP? Schutz gegen DNS-Rebinding.
+bool isOwnHost(String host) {
+    host.toLowerCase();
+    int colon = host.indexOf(':');
+    if (colon >= 0) host = host.substring(0, colon);
+    if (host.length() == 0) return false;
+    if (host == WiFi.localIP().toString()) return true;
+    return host == espHostname || host.startsWith(espHostname + ".");  // z. B. .local oder .fritz.box
+}
+
+// Origin leer (kein Browser, andere ESPs) oder eigene Adresse
+bool isAllowedOrigin(const String& origin) {
+    if (origin.length() == 0) return true;
+    if (!origin.startsWith("http://")) return false;  // auch "null"
+    String host = origin.substring(7);
+    if (host.indexOf('/') >= 0) return false;
+    return isOwnHost(host);
+}
+
+void sendError(int code, const char* message) {
+    DynamicJsonDocument doc(256);
+    doc["success"] = false;
+    doc["error"] = message;
+    String output;
+    serializeJson(doc, output);
+    server.send(code, "application/json", output);
+}
+
+// Jede Anfrage: Host-Header muss zu diesem ESP gehören
+bool checkHost() {
+    if (isOwnHost(server.hostHeader())) return true;
+    sendError(403, "Unbekannter Host");
+    return false;
+}
+
+// Bremse gegen Durchprobieren von Passwörtern: 1 s Sperre pro IP nach Fehlversuch
+struct FailedLogin {
+    uint32_t ip;
+    unsigned long at;
+};
+FailedLogin failedLogins[8] = {};
+int failedLoginNext = 0;
+
+bool loginThrottled(uint32_t ip) {
+    for (const FailedLogin& f : failedLogins) {
+        if (f.ip == ip && f.at != 0 && millis() - f.at < 1000) return true;
+    }
+    return false;
+}
+
+// Host prüfen und Login verlangen (HTTP Basic Auth)
+bool requireAuth() {
+    if (!checkHost()) return false;
+    uint32_t ip = (uint32_t)server.client().remoteIP();
+    if (loginThrottled(ip)) {
+        sendError(429, "Zu viele Fehlversuche, bitte kurz warten");
+        return false;
+    }
+    if (server.authenticate(webUser, webPassword)) return true;
+    if (server.hasHeader("Authorization")) {
+        failedLogins[failedLoginNext] = {ip, millis() | 1};
+        failedLoginNext = (failedLoginNext + 1) % 8;
+    }
+    server.requestAuthentication(BASIC_AUTH, "ServerWatch");
+    return false;
+}
+
+// Schreibende Anfragen: nur JSON und nur von der eigenen Seite (CSRF)
+bool checkJsonWrite() {
+    String contentType = server.header("Content-Type");
+    contentType.toLowerCase();
+    if (!contentType.startsWith("application/json")) {
+        sendError(415, "Content-Type application/json erforderlich");
+        return false;
+    }
+    if (!isAllowedOrigin(server.header("Origin"))) {
+        sendError(403, "Fremder Origin");
+        return false;
+    }
+    return true;
+}
+
+// Einmal-Nonces für Befehle anderer ESPs (30 s gültig)
+struct NonceEntry {
+    String value;
+    unsigned long issued;
+};
+const int nonceSlots = 16;
+NonceEntry nonces[nonceSlots];
+int nonceNext = 0;
+
+String issueNonce() {
+    String nonce = randomHex(16);
+    nonces[nonceNext] = {nonce, millis()};
+    nonceNext = (nonceNext + 1) % nonceSlots;
+    return nonce;
+}
+
+// Nonce prüfen und in jedem Fall verbrauchen
+bool consumeNonce(const String& nonce) {
+    if (!isLowerHex(nonce, 32)) return false;
+    for (NonceEntry& entry : nonces) {
+        if (entry.value.length() > 0 && constantTimeEquals(entry.value, nonce)) {
+            bool fresh = millis() - entry.issued < 30000;
+            entry.value = "";
+            return fresh;
+        }
+    }
+    return false;
+}
+
+// ================= Ende Sicherheit =================
+
 // Web Server Setup
 void setupWebServer() {
     // Hauptseite
     server.on("/", []() {
+        if (!requireAuth()) return;
         server.send_P(200, "text/html", htmlTemplate);
     });
     
-    // API Endpoints
+    // API Endpoints für das Dashboard (Login erforderlich)
     server.on("/api/status", []() {
+        if (!requireAuth()) return;
         server.send(200, "application/json", getStatusJson());
     });
     
+    server.on("/api/wstoken", []() {
+        if (!requireAuth()) return;
+        server.sendHeader("Cache-Control", "no-store");
+        server.send(200, "application/json", "{\"token\":\"" + wsToken + "\"}");
+    });
+    
+    // API Endpoints für andere ESPs (Schwarm-Schlüssel statt Login)
+    server.on("/api/nonce", []() {
+        if (!checkHost()) return;
+        if (!swarmEnabled) return sendError(403, "Schwarm deaktiviert");
+        server.send(200, "application/json", "{\"nonce\":\"" + issueNonce() + "\"}");
+    });
+    
     server.on("/api/localstatus", []() {
+        if (!checkHost()) return;
+        if (!swarmEnabled) return sendError(403, "Schwarm deaktiviert");
+        String challenge = server.arg("c");
+        if (!isLowerHex(challenge, 32)) return sendError(400, "Ungültige Challenge");
         DynamicJsonDocument doc(768);
         doc["id"] = nodeId;
         doc["hostname"] = espHostname;
@@ -528,19 +791,37 @@ void setupWebServer() {
         doc["version"] = firmwareVersion;
         doc["uptime"] = millis();
         doc["rssi"] = WiFi.RSSI();
+        doc["ip"] = WiFi.localIP().toString();
         
+        String payload;
+        serializeJson(doc, payload);
+        DynamicJsonDocument envelope(1536);
+        envelope["payload"] = payload;
+        envelope["sig"] = hmacHex("st|" + challenge + "|" + payload);
         String output;
-        serializeJson(doc, output);
+        serializeJson(envelope, output);
         server.send(200, "application/json", output);
     });
     
     server.on("/api/control", HTTP_POST, []() {
-        DynamicJsonDocument doc(256);
+        if (!checkHost()) return;
+        if (!swarmEnabled) return sendError(403, "Schwarm deaktiviert");
+        if (!checkJsonWrite()) return;
+        DynamicJsonDocument doc(512);
         if (!readJsonBody(doc)) return;
-        sendActionResult(executeLocalAction(doc["action"] | ""));
+        String action = doc["action"] | "";
+        String nonce = doc["nonce"] | "";
+        String sig = doc["sig"] | "";
+        // Nonce wird auch bei falscher Signatur verbraucht; die Signatur bindet Ziel-ID und Aktion
+        bool nonceOk = consumeNonce(nonce);
+        if (!nonceOk || !constantTimeEquals(sig, hmacHex("ctl|" + nodeId + "|" + nonce + "|" + action))) {
+            return sendError(403, "Ungültige Signatur");
+        }
+        sendActionResult(executeLocalAction(action));
     });
     
     server.on("/control", HTTP_POST, []() {
+        if (!requireAuth() || !checkJsonWrite()) return;
         DynamicJsonDocument doc(256);
         if (!readJsonBody(doc)) return;
         String target = doc["target"] | "";
@@ -554,6 +835,8 @@ void setupWebServer() {
         }
     });
     
+    const char* headerKeys[] = {"Content-Type", "Origin"};
+    server.collectHeaders(headerKeys, 2);
     server.begin();
     Serial.println("Web Server gestartet auf Port 80");
 }
@@ -567,7 +850,7 @@ void monitorTask(void* param) {
     for (;;) {
         esp_task_wdt_reset();
         updateLocalStatus();
-        if (millis() - lastScan >= nextScanDelay) {
+        if (swarmEnabled && millis() - lastScan >= nextScanDelay) {
             scanForESPs();
             lastScan = millis();
             // Jitter, damit sich die Scan-Phasen mehrerer ESPs nicht dauerhaft überlagern (Issue #3)
@@ -592,6 +875,10 @@ void setupWatchdog() {
 void setupWebSocket() {
     webSocket.begin();
     webSocket.onEvent(webSocketEvent);
+    // Cross-Site WebSocket Hijacking verhindern: nur eigener oder kein Origin (Issue #18)
+    webSocket.onValidateHttpHeader([](String headerName, String headerValue) {
+        return !headerName.equalsIgnoreCase("Origin") || isAllowedOrigin(headerValue);
+    }, nullptr, 0);
     // Tote Clients (Handy im Standby, eingefrorener Tab) nach ausbleibendem Pong trennen (Issue #17)
     webSocket.enableHeartbeat(15000, 3000, 2);
     Serial.println("WebSocket Server gestartet auf Port 81");
@@ -611,6 +898,12 @@ void setup() {
         pinMode(RESET_BUTTON_PIN, OUTPUT);
         digitalWrite(RESET_BUTTON_PIN, LOW);
     }
+    
+    // Sicherheit
+    wsToken = randomHex(16);
+    swarmEnabled = strlen(swarmKey) >= 16;
+    defaultCredentials = strcmp(webPassword, "serverwatch") == 0;
+    if (defaultCredentials) Serial.println("WARNUNG: Standard-Passwort aktiv - WEB_PASSWORD in secrets.h setzen");
     
     // Netzwerk Setup
     setupWiFi();
