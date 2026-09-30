@@ -48,10 +48,9 @@ def test_cross_site_text_plain_post_is_rejected(swarm, node):
     assert no_press(swarm, node)
 
 
-@known_bug("power-guard")
 def test_power_press_refused_while_server_online(swarm):
-    """Ein kurzer Power-Druck bei laufendem Server loest das Herunterfahren aus. Das Dashboard
-    deaktiviert den Knopf nur im Browser; die API prueft den Zustand nicht."""
+    """Regression #11: Ein kurzer Power-Druck bei laufendem Server loest das Herunterfahren aus;
+    die API muss 'power' (Starten) bei laufendem Server ablehnen."""
     n = swarm.add("Alpha", power=True)
     swarm.set_server("up")
     swarm.wait_ready(n)
@@ -62,19 +61,16 @@ def test_power_press_refused_while_server_online(swarm):
     assert no_press(swarm, n)
 
 
-@known_bug("control-always-success")
 def test_unknown_action_is_rejected(swarm, node):
     r = node.post("/api/control", json={"action": "selfdestruct"})
     assert r.status_code == 400
 
 
-@known_bug("control-always-success")
 def test_malformed_json_is_rejected(swarm, node):
     r = node.post("/api/control", data="{kaputt", headers={"Content-Type": "application/json"})
     assert r.status_code == 400
 
 
-@known_bug("control-always-success")
 def test_dashboard_control_unknown_action_reports_error(swarm, node):
     r = node.post("/control", json={"target": "local", "action": "reboot-now"})
     assert r.status_code == 400 or r.json().get("success") is False
@@ -111,4 +107,15 @@ def test_single_poweron_requires_authentication(swarm):
     swarm.wait_ready(n)
     r = n.post("/poweron", timeout_ms=5000)
     assert r.status_code in (401, 403, 405)
+    assert no_press(swarm, n)
+
+
+def test_single_poweron_refused_while_server_online(swarm):
+    """Regression #11 fuer die Einzel-Version."""
+    n = swarm.add("Solo", sketch="Serverwatch", power=True)
+    swarm.set_server("up")
+    swarm.wait_ready(n)
+    assert swarm.wait_for(lambda: n.get("/status").json()["online"], 8000)
+    r = n.get("/poweron", timeout_ms=5000)
+    assert r.status_code == 409
     assert no_press(swarm, n)

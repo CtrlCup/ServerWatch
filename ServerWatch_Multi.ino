@@ -45,7 +45,7 @@ const char* mdnsServiceName = "serverwatch";      // mDNS Service Name für Auto
 // ENDE DER KONFIGURATIONSVARIABLEN
 // ========================================
 
-const char* firmwareVersion = "1.0.6";
+const char* firmwareVersion = "1.0.7";
 
 // Webserver und WebSocket
 WebServer server(80);
@@ -63,6 +63,12 @@ struct RemoteESP {
     int pingTime;
 };
 
+// Ergebnis eines Steuerbefehls: HTTP-Code (200 = ausgeführt) und Fehlertext
+struct ActionResult {
+    int code;
+    String error;
+};
+
 // Globale Variablen
 // Status-Check und ESP-Scan laufen in einer eigenen Task (monitorTask), damit loop()
 // Webserver und WebSocket nie blockiert (Issues #2, #3). remoteESPs ist durch
@@ -75,6 +81,7 @@ const unsigned long wifiCheckInterval = 10000;
 bool wifiLost = false;
 unsigned long wifiLostSince = 0;
 volatile bool localServerStatus = false;
+volatile bool localServerReachable = false;
 volatile bool localPowerStatus = false;
 volatile int localPingTime = 0;
 String espHostname;
@@ -197,7 +204,6 @@ void setupWatchdog();
 void updateLocalStatus();
 bool checkServerReachable();
 void sendStatusToClients();
-void handleRemoteCommand(String target, String action);
 String getStatusJson(const char* type = nullptr);
 
 // WiFi Setup
@@ -271,6 +277,7 @@ bool checkServerReachable() {
 // Status Update für lokalen Server
 void updateLocalStatus() {
     bool reachable = checkServerReachable();
+    localServerReachable = reachable;
     localPowerStatus = (digitalRead(POWER_CHECK_PIN) == HIGH);
     localServerStatus = reachable && localPowerStatus;
 }
@@ -418,48 +425,101 @@ void sendStatusToClients() {
     webSocket.broadcastTXT(json);
 }
 
-// Remote Command Handler
-void handleRemoteCommand(String target, String action) {
-    if (target == "local") {
-        // Lokalen Server steuern
-        if (action == "power") {
-            digitalWrite(POWER_BUTTON_PIN, HIGH);
-            delay(powerButtonTime);
-            digitalWrite(POWER_BUTTON_PIN, LOW);
-            Serial.println("Power Button gedrückt");
-        }
-        else if (action == "reset" && RESET_BUTTON_PIN != -1) {
-            digitalWrite(RESET_BUTTON_PIN, HIGH);
-            delay(resetButtonTime);
-            digitalWrite(RESET_BUTTON_PIN, LOW);
-            Serial.println("Reset Button gedrückt");
-        }
-    } else {
-        // Remote ESP steuern
-        String remoteIP;
-        xSemaphoreTake(remoteMutex, portMAX_DELAY);
-        auto found = remoteESPs.find(target);
-        if (found != remoteESPs.end()) remoteIP = found->second.ip;
-        xSemaphoreGive(remoteMutex);
-        if (remoteIP.length() > 0) {
-            HTTPClient http;
-            http.begin("http://" + remoteIP + "/api/control");
-            http.addHeader("Content-Type", "application/json");
-            http.setConnectTimeout(1000);
-            http.setTimeout(3000);
-            
-            String payload = "{\"action\":\"" + action + "\"}";
-            int httpCode = http.POST(payload);
-            
-            if (httpCode == 200) {
-                Serial.println("Remote Command erfolgreich: " + target + " - " + action);
-            } else {
-                Serial.println("Remote Command fehlgeschlagen: " + String(httpCode));
-            }
-            
-            http.end();
-        }
+// Taster nicht-blockierend drücken: Pin HIGH, loop() lässt nach Ablauf wieder los
+int pressedPin = -1;
+unsigned long pressStart = 0;
+unsigned long pressDuration = 0;
+
+bool pressButton(int pin, unsigned long durationMs) {
+    if (pressedPin != -1) return false;
+    digitalWrite(pin, HIGH);
+    pressedPin = pin;
+    pressStart = millis();
+    pressDuration = durationMs;
+    return true;
+}
+
+void releaseButtonIfDue() {
+    if (pressedPin != -1 && millis() - pressStart >= pressDuration) {
+        digitalWrite(pressedPin, LOW);
+        pressedPin = -1;
     }
+}
+
+// Läuft der Server? Spannung am Mainboard oder Dienst erreichbar
+bool serverIsOn() {
+    return localPowerStatus || localServerReachable;
+}
+
+// Lokalen Server steuern (Issues #11, #12, #13)
+ActionResult executeLocalAction(const String& action) {
+    if (action != "power" && action != "shutdown" && action != "reset") {
+        return {400, "Unbekannte Aktion: " + action};
+    }
+    if (action == "reset" && RESET_BUTTON_PIN == -1) {
+        return {501, "Kein Reset-Pin konfiguriert"};
+    }
+    bool on = serverIsOn();
+    if (action == "power" && on) return {409, "Server läuft bereits"};
+    if (action == "shutdown" && !on) return {409, "Server ist bereits aus"};
+    if (action == "reset" && !on) return {409, "Server ist aus"};
+
+    int pin = action == "reset" ? RESET_BUTTON_PIN : POWER_BUTTON_PIN;
+    unsigned long duration = action == "reset" ? resetButtonTime : powerButtonTime;
+    if (!pressButton(pin, duration)) return {409, "Es wird bereits ein Taster gedrückt"};
+    Serial.println("Aktion ausgeführt: " + action);
+    return {200, ""};
+}
+
+// Befehl an einen anderen ESP weiterleiten
+ActionResult forwardRemoteAction(const String& target, const String& action) {
+    String remoteIP;
+    xSemaphoreTake(remoteMutex, portMAX_DELAY);
+    auto found = remoteESPs.find(target);
+    if (found != remoteESPs.end()) remoteIP = found->second.ip;
+    xSemaphoreGive(remoteMutex);
+    if (remoteIP.length() == 0) return {404, "Unbekanntes Ziel: " + target};
+
+    DynamicJsonDocument request(256);
+    request["action"] = action;
+    String payload;
+    serializeJson(request, payload);
+
+    HTTPClient http;
+    http.begin("http://" + remoteIP + "/api/control");
+    http.addHeader("Content-Type", "application/json");
+    http.setConnectTimeout(1000);
+    http.setTimeout(3000);
+    int httpCode = http.POST(payload);
+    ActionResult result = {200, ""};
+    if (httpCode < 0) {
+        result = {504, "ESP nicht erreichbar"};
+    } else if (httpCode != 200) {
+        DynamicJsonDocument response(256);
+        deserializeJson(response, http.getString());
+        result = {httpCode, response["error"] | "Fehler beim Ziel-ESP"};
+    }
+    http.end();
+    Serial.println("Remote-Befehl " + action + " an " + target + ": " + String(result.code));
+    return result;
+}
+
+// JSON-Body eines Requests lesen; bei Fehler wird direkt 400 gesendet
+bool readJsonBody(DynamicJsonDocument& doc) {
+    if (!server.hasArg("plain") || deserializeJson(doc, server.arg("plain")) != DeserializationError::Ok || !doc.is<JsonObject>()) {
+        server.send(400, "application/json", "{\"success\":false,\"error\":\"Ungültiges JSON\"}");
+        return false;
+    }
+    return true;
+}
+
+void sendActionResult(const ActionResult& result) {
+    DynamicJsonDocument doc(256);
+    doc["success"] = result.code == 200;
+    if (result.code != 200) doc["error"] = result.error;
+    String output;
+    serializeJson(doc, output);
+    server.send(result.code, "application/json", output);
 }
 
 // Web Server Setup
@@ -487,32 +547,22 @@ void setupWebServer() {
     });
     
     server.on("/api/control", HTTP_POST, []() {
-        if (server.hasArg("plain")) {
-            DynamicJsonDocument doc(256);
-            deserializeJson(doc, server.arg("plain"));
-            
-            String action = doc["action"].as<String>();
-            handleRemoteCommand("local", action);
-            
-            server.send(200, "application/json", "{\"success\":true}");
-        } else {
-            server.send(400, "application/json", "{\"error\":\"No data\"}");
-        }
+        DynamicJsonDocument doc(256);
+        if (!readJsonBody(doc)) return;
+        sendActionResult(executeLocalAction(doc["action"] | ""));
     });
     
     server.on("/control", HTTP_POST, []() {
-        if (server.hasArg("plain")) {
-            DynamicJsonDocument doc(256);
-            deserializeJson(doc, server.arg("plain"));
-            
-            String target = doc["target"].as<String>();
-            String action = doc["action"].as<String>();
-            
-            handleRemoteCommand(target, action);
-            
-            server.send(200, "application/json", "{\"success\":true}");
+        DynamicJsonDocument doc(256);
+        if (!readJsonBody(doc)) return;
+        String target = doc["target"] | "";
+        String action = doc["action"] | "";
+        if (target.length() == 0) {
+            sendActionResult({400, "Kein Ziel angegeben"});
+        } else if (target == "local") {
+            sendActionResult(executeLocalAction(action));
         } else {
-            server.send(400, "application/json", "{\"error\":\"No data\"}");
+            sendActionResult(forwardRemoteAction(target, action));
         }
     });
     
@@ -595,6 +645,7 @@ void setup() {
 void loop() {
     server.handleClient();
     webSocket.loop();
+    releaseButtonIfDue();
     
     unsigned long currentMillis = millis();
     

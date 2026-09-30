@@ -135,6 +135,7 @@ def test_offline_remote_is_marked_unreachable(swarm):
 
 # ------------------------------------------------------------------ Fernsteuerung
 def test_remote_power_command(swarm):
+    swarm.set_server("refused")  # Server aus: Starten ist erlaubt
     a, b = start_apart(swarm, "Alpha", "Beta", power=False)
     key, _ = swarm.wait_for(lambda: remote_entry(a.status(), b)[1] and remote_entry(a.status(), b), DISCOVERY_MS)
     r = a.post("/control", json={"target": key, "action": "power"}, timeout_ms=15000)
@@ -154,17 +155,16 @@ def test_remote_reset_command(swarm):
 
 
 def test_local_power_command_via_dashboard_endpoint(swarm):
+    swarm.set_server("blackhole")  # Server aus
     (a,) = start_apart(swarm, "Alpha", power=False)
-    swarm.set_server("blackhole")
     r = a.post("/control", json={"target": "local", "action": "power"}, timeout_ms=60000)
     assert r.status_code == 200
     assert swarm.wait_for(lambda: a.pulses(POWER_BUTTON_PIN), 5000)
 
 
-@known_bug("shutdown-not-implemented")
 def test_remote_shutdown_command(swarm):
-    """Der Dashboard-Button 'Herunterfahren' sendet action=shutdown, die Firmware kennt die
-    Aktion nicht: es passiert nichts, trotzdem meldet die API Erfolg."""
+    """Regression #12: 'Herunterfahren' (action=shutdown) muss bei laufendem Server den
+    Power-Taster kurz betaetigen."""
     a, b = start_apart(swarm, "Alpha", "Beta")
     key, _ = swarm.wait_for(lambda: remote_entry(a.status(), b)[1] and remote_entry(a.status(), b), DISCOVERY_MS)
     r = a.post("/control", json={"target": key, "action": "shutdown"}, timeout_ms=15000)
@@ -172,17 +172,35 @@ def test_remote_shutdown_command(swarm):
     assert swarm.wait_for(lambda: b.pulses(POWER_BUTTON_PIN), 10000), "Shutdown hat den Power-Pin nicht betaetigt"
 
 
-@known_bug("control-always-success")
 def test_control_unknown_target_reports_error(swarm):
     (a,) = start_apart(swarm, "Alpha")
     r = a.post("/control", json={"target": "ServerWatch-GibtEsNicht", "action": "power"})
     assert r.status_code >= 400 or r.json().get("success") is False
 
 
-@known_bug("control-always-success")
 def test_control_unreachable_remote_reports_error(swarm):
     a, b = start_apart(swarm, "Alpha", "Beta")
     key, _ = swarm.wait_for(lambda: remote_entry(a.status(), b)[1] and remote_entry(a.status(), b), DISCOVERY_MS)
     b.kill()
     r = a.post("/control", json={"target": key, "action": "power"}, timeout_ms=20000)
     assert r.status_code >= 400 or r.json().get("success") is False
+
+
+def test_remote_command_error_is_passed_through(swarm):
+    """Lehnt der Ziel-ESP ab (Server laeuft schon -> 409), gibt der weiterleitende ESP das
+    samt Fehlertext zurueck (Issue #13)."""
+    a, b = start_apart(swarm, "Alpha", "Beta")
+    key, _ = swarm.wait_for(lambda: remote_entry(a.status(), b)[1] and remote_entry(a.status(), b), DISCOVERY_MS)
+    assert swarm.wait_for(lambda: sees(a, b)["serverOnline"], PROPAGATE_MS)
+    r = a.post("/control", json={"target": key, "action": "power"}, timeout_ms=15000)
+    assert r.status_code == 409 and r.json()["success"] is False and r.json()["error"]
+    swarm.sleep(2000)
+    assert not b.pulses(POWER_BUTTON_PIN)
+
+
+def test_shutdown_refused_when_server_off(swarm):
+    swarm.set_server("refused")
+    (a,) = start_apart(swarm, "Alpha", power=False)
+    r = a.post("/control", json={"target": "local", "action": "shutdown"})
+    assert r.status_code == 409
+    assert not a.pulses(POWER_BUTTON_PIN)

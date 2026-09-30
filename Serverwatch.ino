@@ -22,7 +22,7 @@ const int POWER_BUTTON_PIN = 3; // Pin zum Durchschalten (Startknopf)
 // Zeiteinstellungen
 int onTime = 800; // Zeit wie lange der Ausgang bestromt werden soll in Millisekunden
 
-const char* firmwareVersion = "1.0.6";
+const char* firmwareVersion = "1.0.7";
 
 WebServer server(80);
 
@@ -283,6 +283,11 @@ void handleStatus() {
 }
 
 void handlePowerOn() {
+  // Kein Power-Druck bei laufendem Server: das würde ihn herunterfahren (Issue #11)
+  if (lastServerStatus || lastPowerStatus) {
+    server.send(409, "application/json", "{\"success\":false,\"error\":\"Server läuft bereits\"}");
+    return;
+  }
   digitalWrite(POWER_BUTTON_PIN, HIGH);
   delay(onTime);
   digitalWrite(POWER_BUTTON_PIN, LOW);
