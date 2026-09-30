@@ -40,7 +40,7 @@ const char* mdnsServiceName = "serverwatch";      // mDNS Service Name für Auto
 // ENDE DER KONFIGURATIONSVARIABLEN
 // ========================================
 
-const char* firmwareVersion = "1.0.1";
+const char* firmwareVersion = "1.0.2";
 
 // Webserver und WebSocket
 WebServer server(80);
@@ -186,7 +186,7 @@ void updateLocalStatus();
 bool checkServerReachable();
 void sendStatusToClients();
 void handleRemoteCommand(String target, String action);
-String getStatusJson();
+String getStatusJson(const char* type = nullptr);
 
 // WiFi Setup
 void setupWiFi() {
@@ -325,9 +325,10 @@ void scanForESPs() {
     }
 }
 
-// JSON Status für alle Server erstellen
-String getStatusJson() {
+// JSON Status für alle Server erstellen: {"servers":{...}}, mit type zusätzlich {"type":...}
+String getStatusJson(const char* type) {
     DynamicJsonDocument doc(4096);
+    if (type) doc["type"] = type;
     JsonObject servers = doc.createNestedObject("servers");
     
     // Lokaler Server
@@ -372,7 +373,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
                 Serial.printf("WebSocket Client [%u] verbunden von %s\n", num, ip.toString().c_str());
                 
                 // Status senden bei Verbindung
-                String json = "{\"type\":\"update\",\"servers\":" + getStatusJson() + "}";
+                String json = getStatusJson("update");
                 webSocket.sendTXT(num, json);
             }
             break;
@@ -385,7 +386,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length
 
 // Status an alle WebSocket Clients senden
 void sendStatusToClients() {
-    String json = "{\"type\":\"update\",\"servers\":" + getStatusJson() + "}";
+    String json = getStatusJson("update");
     webSocket.broadcastTXT(json);
 }
 

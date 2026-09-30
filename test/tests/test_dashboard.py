@@ -61,11 +61,9 @@ def test_dashboard_renders_cards_from_http_status(swarm, tmp_path):
     assert r["errors"] == []
 
 
-@known_bug("ws-nested-servers")
 def test_dashboard_renders_cards_from_websocket_update(swarm, tmp_path):
-    """Die Firmware schickt {"type":"update","servers":{"servers":{...}}} (doppelt verschachtelt).
-    Das Dashboard rendert daraus eine einzelne Karte 'Unbekannt', bis der naechste HTTP-Poll
-    (alle 5 s) wieder die richtigen Karten zeichnet -> Flackern."""
+    """Regression #6: WS-Updates muessen {"type":"update","servers":{...}} liefern (nicht doppelt
+    verschachtelt), sonst rendert das Dashboard eine einzelne Karte 'Unbekannt'."""
     a, b = discovered_pair(swarm)
     with a.websocket() as ws:
         msg = ws.recv(timeout=swarm.real_s(4000))

@@ -98,7 +98,6 @@ def test_remote_change_propagates_to_api(swarm):
         "Wiederkehr von Beta kommt bei Alpha nicht an"
 
 
-@known_bug("ws-nested-servers")
 def test_remote_change_is_pushed_via_websocket(swarm):
     a, b = start_apart(swarm, "Alpha", "Beta")
     assert swarm.wait_for(lambda: sees(a, b), DISCOVERY_MS)

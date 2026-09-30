@@ -16,7 +16,6 @@ KNOWN_BUGS = {
     "scan-collision": 3,
     "no-watchdog": 4,
     "boot-wifi-hang": 5,
-    "ws-nested-servers": 6,
     "dashboard-xss": 7,
     "no-auth": 8,
     "csrf": 9,
