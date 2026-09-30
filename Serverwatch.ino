@@ -20,6 +20,8 @@ const int POWER_BUTTON_PIN = 3; // Pin zum Durchschalten (Startknopf)
 // Zeiteinstellungen
 int onTime = 800; // Zeit wie lange der Ausgang bestromt werden soll in Millisekunden
 
+const char* firmwareVersion = "1.0.1";
+
 WebServer server(80);
 
 // Status-Variablen für kontinuierliche Überwachung
@@ -33,9 +35,9 @@ const unsigned long wifiCheckInterval = 10000; // WiFi-Status alle 10 Sekunden p
 
 bool checkServerReachable() {
   WiFiClient client;
-  client.setTimeout(1000);
-  
-  bool connected = client.connect(serverIP, checkPort);
+
+  // Timeout explizit in ms: setTimeout() erwartet in arduino-esp32 2.x Sekunden (Issue #1)
+  bool connected = client.connect(serverIP, checkPort, 1000);
   if (connected) {
     client.stop();
     return true;
@@ -261,8 +263,9 @@ void handleRoot() {
 }
 
 void handleStatus() {
-  bool reachable = checkServerReachable();
-  bool powerOk = digitalRead(POWER_CHECK_PIN) == HIGH;
+  // Nur die im loop() ermittelten Werte ausliefern, nicht pro Anfrage verbinden (Issue #1)
+  bool reachable = lastServerStatus;
+  bool powerOk = lastPowerStatus;
   bool online = reachable && powerOk;
   
   String json = "{\"online\":" + String(online ? "true" : "false") + 

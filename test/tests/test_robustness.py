@@ -34,7 +34,6 @@ def test_ui_responsive_when_server_online(swarm):
     assert probe(swarm, a, 15000) == []
 
 
-@known_bug("blocking-connect")
 def test_ui_responsive_when_server_powered_off(swarm):
     """Ist der ueberwachte Server AUS (Host antwortet nicht, kein TCP-RST), blockiert
     WiFiClient::connect() den loop(): client.setTimeout(1000) bedeutet in arduino-esp32 2.0.x
@@ -48,7 +47,6 @@ def test_ui_responsive_when_server_powered_off(swarm):
     assert failures == [], f"{len(failures)} Anfragen ohne Antwort (Timeout 3 s)"
 
 
-@known_bug("blocking-connect")
 def test_power_button_usable_when_server_powered_off(swarm):
     a = swarm.add("Alpha", power=False)
     swarm.set_server("refused")

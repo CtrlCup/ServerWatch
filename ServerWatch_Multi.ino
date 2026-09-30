@@ -40,6 +40,8 @@ const char* mdnsServiceName = "serverwatch";      // mDNS Service Name für Auto
 // ENDE DER KONFIGURATIONSVARIABLEN
 // ========================================
 
+const char* firmwareVersion = "1.0.1";
+
 // Webserver und WebSocket
 WebServer server(80);
 WebSocketsServer webSocket = WebSocketsServer(81);
@@ -225,7 +227,7 @@ void setupMDNS() {
     // Service advertisen
     MDNS.addService(mdnsServiceName, "tcp", 80);
     MDNS.addServiceTxt(mdnsServiceName, "tcp", "server", serverName);
-    MDNS.addServiceTxt(mdnsServiceName, "tcp", "version", "1.0");
+    MDNS.addServiceTxt(mdnsServiceName, "tcp", "version", firmwareVersion);
     
     Serial.println("mDNS Service gestartet: " + espHostname);
 }
@@ -233,10 +235,10 @@ void setupMDNS() {
 // Server Ping Check
 bool checkServerReachable() {
     WiFiClient client;
-    client.setTimeout(pingTimeout);
-    
+
     unsigned long startTime = millis();
-    bool connected = client.connect(serverIP, serverCheckPort);
+    // Timeout explizit in ms: setTimeout() erwartet in arduino-esp32 2.x Sekunden (Issue #1)
+    bool connected = client.connect(serverIP, serverCheckPort, pingTimeout);
     
     if (connected) {
         localPingTime = millis() - startTime;

@@ -16,15 +16,15 @@ def solo(swarm, **kw):
 def test_single_status_reports_online(swarm):
     n = solo(swarm, power=True)
     swarm.set_server("up")
-    s = n.get("/status").json()
+    s = swarm.wait_for(lambda: (lambda j: j if j["online"] else None)(n.get("/status").json()), 8000)
     assert s == {"online": True, "reachable": True, "power": True}
 
 
 def test_single_status_reports_offline_when_port_closed(swarm):
     n = solo(swarm, power=True)
     swarm.set_server("refused")
-    s = n.get("/status").json()
-    assert s["reachable"] is False and s["online"] is False
+    s = swarm.wait_for(lambda: (lambda j: j if j["reachable"] is False else None)(n.get("/status").json()), 8000)
+    assert s and s["online"] is False
 
 
 def test_single_page_contains_config(swarm):
@@ -42,7 +42,6 @@ def test_single_poweron_presses_button(swarm):
     assert 700 <= dur <= 1500
 
 
-@known_bug("blocking-connect")
 def test_single_status_responsive_when_server_powered_off(swarm):
     """/status fuehrt bei JEDER Anfrage einen blockierenden TCP-Connect aus (Timeout 1000 s
     wegen setTimeout(1000) in Sekunden). Das UI pollt alle 5 s -> der ESP haengt."""
