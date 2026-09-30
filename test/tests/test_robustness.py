@@ -6,6 +6,7 @@ trennen hilft": siehe die Tests zu blockierendem Server-Check, WLAN und Watchdog
 import socket
 import time
 
+import pytest
 import requests
 
 from conftest import known_bug
@@ -123,11 +124,11 @@ def test_boot_recovers_after_initial_auth_failures(swarm):
     swarm.wait_ready(a, timeout_ms=60000)
 
 
-@known_bug("no-watchdog")
-def test_node_recovers_from_unknown_hang(swarm):
-    """Simulierter Haenger im loop() (SIM_HANG_AT_MS). Ohne Watchdog bleibt der ESP fuer
-    immer unerreichbar. Erwartung: Task-/Loop-Watchdog loest einen Neustart aus."""
-    a = swarm.add("Alpha", env={"SIM_HANG_AT_MS": "15000"})
+@pytest.mark.parametrize("sketch", ["ServerWatch_Multi", "Serverwatch"])
+def test_node_recovers_from_unknown_hang(swarm, sketch):
+    """Regression #4: Simulierter Haenger im loop() (SIM_HANG_AT_MS). Der Watchdog muss einen
+    Neustart ausloesen, sonst bliebe der ESP bis zum Stromtrennen unerreichbar."""
+    a = swarm.add("Alpha", sketch=sketch, env={"SIM_HANG_AT_MS": "15000"})
     swarm.wait_ready(a)
     assert swarm.wait_for(lambda: any(e == "sim_hang" for _, e in a.events()), 20000)
     assert swarm.wait_for(lambda: a.boots() >= 2, 30000), "Kein Neustart nach Haenger"
@@ -159,3 +160,26 @@ def test_websocket_accepts_new_client_when_stale_clients_exist(swarm):
     finally:
         for s in zombies:
             s.close()
+
+
+def test_no_watchdog_reset_in_normal_operation(swarm):
+    """Der Watchdog darf im Normalbetrieb nie ausloesen, auch nicht bei ausgeschaltetem Server
+    und mit einem zweiten ESP im Netz."""
+    a = swarm.add("Alpha", power=False)
+    swarm.sleep(5000)
+    b = swarm.add("Beta")
+    swarm.set_server("blackhole")
+    swarm.wait_ready(a, b)
+    swarm.sleep(60000)
+    assert a.boots() == 1 and b.boots() == 1, [e for _, e in a.events() + b.events() if e.startswith("restart")]
+
+
+def test_node_restarts_after_long_wifi_outage(swarm):
+    """Faellt das WLAN laenger als wifiRestartTimeout (5 min) aus, startet der ESP neu, als
+    letzte Rueckfallebene, falls der WLAN-Treiber haengt."""
+    a = swarm.add("Alpha")
+    swarm.wait_ready(a)
+    a.set_ap(False)
+    assert swarm.wait_for(lambda: a.boots() >= 2, 330000, poll_ms=5000), "Kein Neustart nach 5 min ohne WLAN"
+    a.set_ap(True)
+    swarm.wait_ready(a, timeout_ms=30000)

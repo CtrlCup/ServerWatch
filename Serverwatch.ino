@@ -1,6 +1,8 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <WiFiClient.h>
+#include <esp_task_wdt.h>
+#include <esp_idf_version.h>
 
 // WiFi Zugangsdaten
 const char* ssid = "DEIN_WLAN_NAME";      // Wlan SSID muss gesetzt werden
@@ -20,7 +22,7 @@ const int POWER_BUTTON_PIN = 3; // Pin zum Durchschalten (Startknopf)
 // Zeiteinstellungen
 int onTime = 800; // Zeit wie lange der Ausgang bestromt werden soll in Millisekunden
 
-const char* firmwareVersion = "1.0.3";
+const char* firmwareVersion = "1.0.4";
 
 WebServer server(80);
 
@@ -31,6 +33,10 @@ unsigned long lastCheck = 0;
 const unsigned long checkInterval = 3000; // Alle 3 Sekunden prüfen
 unsigned long lastWiFiCheck = 0;
 const unsigned long wifiCheckInterval = 10000; // WiFi-Status alle 10 Sekunden prüfen
+const int watchdogTimeoutS = 15;                  // Neustart, wenn loop() so lange (s) hängt
+const unsigned long wifiRestartTimeout = 300000;  // Neustart, wenn WLAN so lange (ms) getrennt bleibt
+bool wifiLost = false;
+unsigned long wifiLostSince = 0;
 
 
 bool checkServerReachable() {
@@ -328,6 +334,15 @@ void setup() {
   
   server.begin();
   Serial.println("Webserver gestartet!");
+
+  // Watchdog: startet den ESP neu, wenn loop() hängt (Issue #4)
+#if ESP_IDF_VERSION_MAJOR >= 5
+  esp_task_wdt_config_t wdtConfig = { .timeout_ms = watchdogTimeoutS * 1000, .idle_core_mask = 0, .trigger_panic = true };
+  esp_task_wdt_reconfigure(&wdtConfig);
+#else
+  esp_task_wdt_init(watchdogTimeoutS, true);
+#endif
+  enableLoopWDT();
 }
 
 void loop() {
@@ -339,9 +354,18 @@ void loop() {
   if (currentMillis - lastWiFiCheck >= wifiCheckInterval) {
     lastWiFiCheck = currentMillis;
     if (WiFi.status() != WL_CONNECTED) {
+      if (!wifiLost) {
+        wifiLost = true;
+        wifiLostSince = currentMillis;
+      } else if (currentMillis - wifiLostSince >= wifiRestartTimeout) {
+        Serial.println("WiFi seit langem getrennt - Neustart");
+        ESP.restart();
+      }
       Serial.println("WiFi Verbindung verloren! Versuche neu zu verbinden...");
       WiFi.disconnect();
       WiFi.begin(ssid, password);
+    } else {
+      wifiLost = false;
     }
   }
   

@@ -5,6 +5,8 @@
 #include <WebSocketsServer.h>
 #include <HTTPClient.h>
 #include <WiFiClient.h>
+#include <esp_task_wdt.h>
+#include <esp_idf_version.h>
 #include <vector>
 #include <map>
 
@@ -32,6 +34,8 @@ const int resetButtonTime = 500;                  // Millisekunden für Reset-Bu
 const int scanInterval = 10000;                   // Millisekunden zwischen Netzwerk-Scans (10 Sekunden)
 const int statusCheckInterval = 3000;             // Millisekunden zwischen Status-Checks (3 Sekunden)
 const int pingTimeout = 1000;                     // Millisekunden Timeout für Ping-Versuche
+const int watchdogTimeoutS = 15;                  // Sekunden bis zum automatischen Neustart bei Hänger
+const unsigned long wifiRestartTimeout = 300000;  // Neustart, wenn WLAN so lange (ms) getrennt bleibt
 
 // mDNS Service Name
 const char* mdnsServiceName = "serverwatch";      // mDNS Service Name für Auto-Discovery
@@ -40,7 +44,7 @@ const char* mdnsServiceName = "serverwatch";      // mDNS Service Name für Auto
 // ENDE DER KONFIGURATIONSVARIABLEN
 // ========================================
 
-const char* firmwareVersion = "1.0.3";
+const char* firmwareVersion = "1.0.4";
 
 // Webserver und WebSocket
 WebServer server(80);
@@ -67,6 +71,8 @@ SemaphoreHandle_t remoteMutex;
 unsigned long lastStatusBroadcast = 0;
 unsigned long lastWiFiCheck = 0;
 const unsigned long wifiCheckInterval = 10000;
+bool wifiLost = false;
+unsigned long wifiLostSince = 0;
 volatile bool localServerStatus = false;
 volatile bool localPowerStatus = false;
 volatile int localPingTime = 0;
@@ -186,6 +192,7 @@ void setupWebServer();
 void setupWebSocket();
 void scanForESPs();
 void monitorTask(void* param);
+void setupWatchdog();
 void updateLocalStatus();
 bool checkServerReachable();
 void sendStatusToClients();
@@ -291,6 +298,7 @@ void scanForESPs() {
         
         int httpCode = http.GET();
         
+        esp_task_wdt_reset();
         if (httpCode == 200) {
             String payload = http.getString();
             DynamicJsonDocument doc(512);
@@ -510,7 +518,9 @@ void setupWebServer() {
 void monitorTask(void* param) {
     unsigned long lastScan = 0;
     unsigned long nextScanDelay = 0;  // erster Scan sofort
+    esp_task_wdt_add(NULL);
     for (;;) {
+        esp_task_wdt_reset();
         updateLocalStatus();
         if (millis() - lastScan >= nextScanDelay) {
             scanForESPs();
@@ -520,6 +530,17 @@ void monitorTask(void* param) {
         }
         vTaskDelay(pdMS_TO_TICKS(statusCheckInterval));
     }
+}
+
+// Watchdog: startet den ESP neu, wenn loop() oder die Monitor-Task hängen (Issue #4)
+void setupWatchdog() {
+#if ESP_IDF_VERSION_MAJOR >= 5
+    esp_task_wdt_config_t config = { .timeout_ms = watchdogTimeoutS * 1000, .idle_core_mask = 0, .trigger_panic = true };
+    esp_task_wdt_reconfigure(&config);
+#else
+    esp_task_wdt_init(watchdogTimeoutS, true);
+#endif
+    enableLoopWDT();
 }
 
 // WebSocket Setup
@@ -553,6 +574,7 @@ void setup() {
     // Initialer Status Check, danach übernimmt die Hintergrund-Task
     updateLocalStatus();
     remoteMutex = xSemaphoreCreateMutex();
+    setupWatchdog();
     xTaskCreate(monitorTask, "monitor", 8192, NULL, 1, NULL);
     
     Serial.println("\n=== ServerWatch Multi bereit ===");
@@ -571,9 +593,18 @@ void loop() {
     if (currentMillis - lastWiFiCheck >= wifiCheckInterval) {
         lastWiFiCheck = currentMillis;
         if (WiFi.status() != WL_CONNECTED) {
+            if (!wifiLost) {
+                wifiLost = true;
+                wifiLostSince = currentMillis;
+            } else if (currentMillis - wifiLostSince >= wifiRestartTimeout) {
+                Serial.println("WiFi seit langem getrennt - Neustart");
+                ESP.restart();
+            }
             Serial.println("WiFi Verbindung verloren! Versuche neu zu verbinden...");
             WiFi.disconnect();
             WiFi.begin(ssid, password);
+        } else {
+            wifiLost = false;
         }
     }
     
