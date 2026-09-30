@@ -45,7 +45,7 @@ const char* mdnsServiceName = "serverwatch";      // mDNS Service Name für Auto
 // ENDE DER KONFIGURATIONSVARIABLEN
 // ========================================
 
-const char* firmwareVersion = "1.0.5";
+const char* firmwareVersion = "1.0.6";
 
 // Webserver und WebSocket
 WebServer server(80);
@@ -554,6 +554,8 @@ void setupWatchdog() {
 void setupWebSocket() {
     webSocket.begin();
     webSocket.onEvent(webSocketEvent);
+    // Tote Clients (Handy im Standby, eingefrorener Tab) nach ausbleibendem Pong trennen (Issue #17)
+    webSocket.enableHeartbeat(15000, 3000, 2);
     Serial.println("WebSocket Server gestartet auf Port 81");
 }
 

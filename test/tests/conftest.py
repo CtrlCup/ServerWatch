@@ -22,7 +22,6 @@ KNOWN_BUGS = {
     "duplicate-hostname": 14,
     "offline-remote-state": 15,
     "remote-info-incomplete": 16,
-    "ws-stale-clients": 17,
     "ws-origin": 18,
 }
 

@@ -134,11 +134,9 @@ def test_node_recovers_from_unknown_hang(swarm, sketch):
     swarm.wait_ready(a, timeout_ms=30000)
 
 
-@known_bug("ws-stale-clients")
 def test_websocket_accepts_new_client_when_stale_clients_exist(swarm):
-    """Die WebSocket-Lib hat 5 Slots. Tote Verbindungen (Handy im Standby, Tab eingefroren)
-    blockieren Slots, weil kein Heartbeat konfiguriert ist; neue Dashboards bekommen dann
-    keine Live-Updates mehr."""
+    """Regression #17: Die WebSocket-Lib hat 5 Slots. Tote Verbindungen (Handy im Standby, Tab
+    eingefroren) muessen per Heartbeat getrennt werden, damit neue Dashboards Updates bekommen."""
     a = swarm.add("Alpha")
     swarm.wait_ready(a)
     zombies = []
@@ -150,8 +148,11 @@ def test_websocket_accepts_new_client_when_stale_clients_exist(swarm):
     swarm.sleep(3000)
 
     def fresh_client_gets_update():
-        with a.websocket(timeout_ms=3000) as ws:
-            return ws_messages(ws, swarm.real_s(4000))
+        try:
+            with a.websocket(timeout_ms=3000) as ws:
+                return ws_messages(ws, swarm.real_s(4000))
+        except Exception:  # abgewiesen, solange alle Slots belegt sind
+            return None
 
     try:
         assert swarm.wait_for(fresh_client_gets_update, 60000, poll_ms=2000), \
