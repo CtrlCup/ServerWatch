@@ -34,11 +34,9 @@ def test_discovery_nodes_booted_apart(swarm):
     assert swarm.wait_for(lambda: sees(b, a), DISCOVERY_MS), "Beta erkennt Alpha nicht"
 
 
-@known_bug("scan-collision")
 def test_discovery_nodes_booted_together(swarm):
-    """Typischer Fall nach Stromausfall: alle ESPs booten gleichzeitig.
-    Beide scannen dann im selben 10-s-Takt; waehrend A auf die HTTP-Antwort von B wartet,
-    steckt B in seiner eigenen blockierenden mDNS-Query bzw. HTTP-Anfrage an A."""
+    """Regression #3: Typischer Fall nach Stromausfall, alle ESPs booten gleichzeitig. Frueher
+    blockierten sich die gleichzeitigen Scans gegenseitig (Scan lief im loop())."""
     a = swarm.add("Alpha")
     b = swarm.add("Beta")
     swarm.wait_ready(a, b)
@@ -46,9 +44,8 @@ def test_discovery_nodes_booted_together(swarm):
     assert swarm.wait_for(lambda: sees(b, a), DISCOVERY_MS), "Beta erkennt Alpha nicht"
 
 
-@known_bug("scan-collision")
 def test_three_nodes_full_mesh(swarm):
-    """Auch zeitversetzt gestartet kollidieren bei 3 Knoten zwei Scan-Phasen (Abstand < ~3 s)."""
+    """Regression #3: 3 Knoten mit 3,5 s Boot-Abstand muessen sich alle gegenseitig sehen."""
     nodes = start_apart(swarm, "Alpha", "Beta", "Gamma", gap_ms=3500)
     for x in nodes:
         for y in nodes:

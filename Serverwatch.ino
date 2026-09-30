@@ -20,7 +20,7 @@ const int POWER_BUTTON_PIN = 3; // Pin zum Durchschalten (Startknopf)
 // Zeiteinstellungen
 int onTime = 800; // Zeit wie lange der Ausgang bestromt werden soll in Millisekunden
 
-const char* firmwareVersion = "1.0.2";
+const char* firmwareVersion = "1.0.3";
 
 WebServer server(80);
 

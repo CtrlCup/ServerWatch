@@ -43,8 +43,7 @@ def test_single_poweron_presses_button(swarm):
 
 
 def test_single_status_responsive_when_server_powered_off(swarm):
-    """/status fuehrt bei JEDER Anfrage einen blockierenden TCP-Connect aus (Timeout 1000 s
-    wegen setTimeout(1000) in Sekunden). Das UI pollt alle 5 s -> der ESP haengt."""
+    """Regression #1: /status liefert den gecachten Wert, statt pro Anfrage zu verbinden."""
     n = solo(swarm, power=False)
     swarm.set_server("blackhole")  # Server wird ausgeschaltet
     t0 = time.monotonic()

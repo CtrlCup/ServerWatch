@@ -40,7 +40,7 @@ const char* mdnsServiceName = "serverwatch";      // mDNS Service Name für Auto
 // ENDE DER KONFIGURATIONSVARIABLEN
 // ========================================
 
-const char* firmwareVersion = "1.0.2";
+const char* firmwareVersion = "1.0.3";
 
 // Webserver und WebSocket
 WebServer server(80);
@@ -59,14 +59,17 @@ struct RemoteESP {
 };
 
 // Globale Variablen
+// Status-Check und ESP-Scan laufen in einer eigenen Task (monitorTask), damit loop()
+// Webserver und WebSocket nie blockiert (Issues #2, #3). remoteESPs ist durch
+// remoteMutex geschützt; die lokalen Statuswerte sind einfache volatile Variablen.
 std::map<String, RemoteESP> remoteESPs;
-unsigned long lastScan = 0;
-unsigned long lastStatusCheck = 0;
+SemaphoreHandle_t remoteMutex;
+unsigned long lastStatusBroadcast = 0;
 unsigned long lastWiFiCheck = 0;
 const unsigned long wifiCheckInterval = 10000;
-bool localServerStatus = false;
-bool localPowerStatus = false;
-int localPingTime = 0;
+volatile bool localServerStatus = false;
+volatile bool localPowerStatus = false;
+volatile int localPingTime = 0;
 String espHostname;
 
 // HTML Template
@@ -182,6 +185,7 @@ void setupMDNS();
 void setupWebServer();
 void setupWebSocket();
 void scanForESPs();
+void monitorTask(void* param);
 void updateLocalStatus();
 bool checkServerReachable();
 void sendStatusToClients();
@@ -282,6 +286,7 @@ void scanForESPs() {
         // Remote ESP Status abrufen
         HTTPClient http;
         http.begin("http://" + ip.toString() + "/api/localstatus");
+        http.setConnectTimeout(1000);
         http.setTimeout(2000);
         
         int httpCode = http.GET();
@@ -301,19 +306,24 @@ void scanForESPs() {
                 esp.espReachable = true;
                 esp.lastSeen = millis();
                 
+                xSemaphoreTake(remoteMutex, portMAX_DELAY);
                 remoteESPs[hostname] = esp;
+                xSemaphoreGive(remoteMutex);
             }
         } else {
             // ESP nicht erreichbar markieren
+            xSemaphoreTake(remoteMutex, portMAX_DELAY);
             if (remoteESPs.find(hostname) != remoteESPs.end()) {
                 remoteESPs[hostname].espReachable = false;
             }
+            xSemaphoreGive(remoteMutex);
         }
         
         http.end();
     }
     
     // Alte ESPs entfernen (nicht mehr im Netzwerk)
+    xSemaphoreTake(remoteMutex, portMAX_DELAY);
     auto it = remoteESPs.begin();
     while (it != remoteESPs.end()) {
         if (millis() - it->second.lastSeen > 60000) { // 60 Sekunden Timeout
@@ -323,6 +333,7 @@ void scanForESPs() {
             ++it;
         }
     }
+    xSemaphoreGive(remoteMutex);
 }
 
 // JSON Status für alle Server erstellen: {"servers":{...}}, mit type zusätzlich {"type":...}
@@ -343,6 +354,7 @@ String getStatusJson(const char* type) {
     local["pingTime"] = localPingTime;
     
     // Remote Server
+    xSemaphoreTake(remoteMutex, portMAX_DELAY);
     for (auto& esp : remoteESPs) {
         JsonObject remote = servers.createNestedObject(esp.first);
         remote["isLocal"] = false;
@@ -354,6 +366,7 @@ String getStatusJson(const char* type) {
         remote["espReachable"] = esp.second.espReachable;
         remote["pingTime"] = esp.second.pingTime;
     }
+    xSemaphoreGive(remoteMutex);
     
     String output;
     serializeJson(doc, output);
@@ -408,13 +421,17 @@ void handleRemoteCommand(String target, String action) {
         }
     } else {
         // Remote ESP steuern
-        if (remoteESPs.find(target) != remoteESPs.end()) {
-            RemoteESP& esp = remoteESPs[target];
-            
+        String remoteIP;
+        xSemaphoreTake(remoteMutex, portMAX_DELAY);
+        auto found = remoteESPs.find(target);
+        if (found != remoteESPs.end()) remoteIP = found->second.ip;
+        xSemaphoreGive(remoteMutex);
+        if (remoteIP.length() > 0) {
             HTTPClient http;
-            http.begin("http://" + esp.ip + "/api/control");
+            http.begin("http://" + remoteIP + "/api/control");
             http.addHeader("Content-Type", "application/json");
-            http.setTimeout(5000);
+            http.setConnectTimeout(1000);
+            http.setTimeout(3000);
             
             String payload = "{\"action\":\"" + action + "\"}";
             int httpCode = http.POST(payload);
@@ -488,6 +505,23 @@ void setupWebServer() {
     Serial.println("Web Server gestartet auf Port 80");
 }
 
+// Hintergrund-Task: lokaler Status-Check und Suche nach anderen ESPs.
+// Alles Blockierende (TCP-Connect, mDNS-Query, HTTP-Abfragen) passiert hier, nicht im loop().
+void monitorTask(void* param) {
+    unsigned long lastScan = 0;
+    unsigned long nextScanDelay = 0;  // erster Scan sofort
+    for (;;) {
+        updateLocalStatus();
+        if (millis() - lastScan >= nextScanDelay) {
+            scanForESPs();
+            lastScan = millis();
+            // Jitter, damit sich die Scan-Phasen mehrerer ESPs nicht dauerhaft überlagern (Issue #3)
+            nextScanDelay = scanInterval + random(0, 3000);
+        }
+        vTaskDelay(pdMS_TO_TICKS(statusCheckInterval));
+    }
+}
+
 // WebSocket Setup
 void setupWebSocket() {
     webSocket.begin();
@@ -516,8 +550,10 @@ void setup() {
     setupWebServer();
     setupWebSocket();
     
-    // Initialer Status Check
+    // Initialer Status Check, danach übernimmt die Hintergrund-Task
     updateLocalStatus();
+    remoteMutex = xSemaphoreCreateMutex();
+    xTaskCreate(monitorTask, "monitor", 8192, NULL, 1, NULL);
     
     Serial.println("\n=== ServerWatch Multi bereit ===");
     Serial.println("Web Interface: http://" + WiFi.localIP().toString());
@@ -541,16 +577,9 @@ void loop() {
         }
     }
     
-    // Periodischer Status Check
-    if (currentMillis - lastStatusCheck >= statusCheckInterval) {
-        lastStatusCheck = currentMillis;
-        updateLocalStatus();
+    // Status periodisch an WebSocket-Clients senden (Werte liefert die Hintergrund-Task)
+    if (currentMillis - lastStatusBroadcast >= statusCheckInterval) {
+        lastStatusBroadcast = currentMillis;
         sendStatusToClients();
-    }
-    
-    // Periodischer ESP Scan
-    if (currentMillis - lastScan >= scanInterval) {
-        lastScan = currentMillis;
-        scanForESPs();
     }
 }

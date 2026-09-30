@@ -35,10 +35,8 @@ def test_ui_responsive_when_server_online(swarm):
 
 
 def test_ui_responsive_when_server_powered_off(swarm):
-    """Ist der ueberwachte Server AUS (Host antwortet nicht, kein TCP-RST), blockiert
-    WiFiClient::connect() den loop(): client.setTimeout(1000) bedeutet in arduino-esp32 2.0.x
-    1000 *Sekunden*; lwIP gibt den SYN erst nach Minuten auf. Webinterface/WebSocket/WLAN-Check
-    stehen so lange still - genau dann, wenn man den Server starten will."""
+    """Regression #1: Ist der ueberwachte Server AUS (kein TCP-RST), darf der Status-Check das
+    Webinterface nicht blockieren (frueher setTimeout(1000) = 1000 s in arduino-esp32 2.x)."""
     a = swarm.add("Alpha", power=False)
     swarm.set_server("refused")
     swarm.wait_ready(a)
@@ -59,10 +57,9 @@ def test_power_button_usable_when_server_powered_off(swarm):
     assert (time.monotonic() - t0) < swarm.real_s(3000)
 
 
-@known_bug("blocking-scan")
 def test_loop_never_blocks_longer_than_one_second(swarm):
-    """mDNS-Query (3 s fest) + sequentielle HTTP-Abfragen (bis 5 s Connect + 2 s Read pro ESP)
-    laufen direkt im loop(). Waehrenddessen werden weder HTTP noch WebSocket bedient."""
+    """Regression #2: mDNS-Query (3 s) und HTTP-Abfragen anderer ESPs duerfen loop() (Webserver,
+    WebSocket) nicht blockieren."""
     a = swarm.add("Alpha")
     swarm.sleep(5000)
     b = swarm.add("Beta")
