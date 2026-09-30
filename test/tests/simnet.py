@@ -138,12 +138,60 @@ class Node:
         return connect(f"ws://{self.ip}:{81 + self.swarm.port_offset}/", open_timeout=self.swarm.real_s(timeout_ms), **kw)
 
 
+class RogueNode:
+    """Gefaelschtes Geraet im LAN: meldet sich per mDNS als ServerWatch und beantwortet HTTP
+    mit frei waehlbaren Antworten. `routes`: {pfad: (status, body_dict_oder_str)}; alle
+    Anfragen landen in `requests` (Methode, Pfad inkl. Query, Header, Body)."""
+
+    def __init__(self, swarm, ip, hostname, routes):
+        import http.server
+        import threading
+        self.swarm, self.ip, self.hostname, self.routes, self.requests = swarm, ip, hostname, routes, []
+        self.dir = os.path.join(swarm.state, "nodes", ip)
+        os.makedirs(self.dir, exist_ok=True)
+        for name, value in (("pid", str(os.getpid())), ("link", "1")):
+            with open(os.path.join(self.dir, name), "w") as f:
+                f.write(value)
+        with open(os.path.join(swarm.state, "mdns", hostname + ".rec"), "w") as f:
+            f.write(f"pid={os.getpid()}\nip={ip}\nhost={hostname}\nsvc=_serverwatch._tcp:80\n")
+        rogue = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def _serve(self):
+                body = self.rfile.read(int(self.headers.get("Content-Length") or 0)).decode(errors="replace")
+                rogue.requests.append((self.command, self.path, dict(self.headers), body))
+                status, payload = rogue.routes.get(self.path.split("?")[0], (404, "not found"))
+                data = (payload if isinstance(payload, str) else json.dumps(payload)).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            do_GET = do_POST = _serve
+
+        os.makedirs(os.path.join(swarm.state, "mdns"), exist_ok=True)
+        self.httpd = http.server.ThreadingHTTPServer((ip, 80 + swarm.port_offset), Handler)
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+    def kill(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+        with open(os.path.join(self.dir, "link"), "w") as f:
+            f.write("0")
+
+
 class Swarm:
     def __init__(self, state_dir, scale=5.0):
         self.state = str(state_dir)
         self.scale = float(scale)
         self.port_offset = random.randrange(20000, 40000, 100)
         self.nodes = []
+        self.rogues = []
+        self._next_ip = 1
         os.makedirs(os.path.join(self.state, "hosts"), exist_ok=True)
         self.set_server("up")
 
@@ -177,7 +225,7 @@ class Swarm:
 
     # Knoten ----------------------------------------------------------------
     def add(self, name, sketch="ServerWatch_Multi", power=True, start=True, env=None, cfg=None, ap_up=True):
-        ip = f"127.0.10.{len(self.nodes) + 1}"
+        ip = self._alloc_ip()
         e = dict(env or {})
         key = "SWCFG_serverName" if sketch == "ServerWatch_Multi" else "SWCFG_nodeName"
         e.setdefault(key, name)
@@ -191,6 +239,17 @@ class Swarm:
             node.start()
         return node
 
+    def _alloc_ip(self):
+        ip = f"127.0.10.{self._next_ip}"
+        self._next_ip += 1
+        return ip
+
+    def add_rogue(self, hostname, routes):
+        os.makedirs(os.path.join(self.state, "mdns"), exist_ok=True)
+        r = RogueNode(self, self._alloc_ip(), hostname, routes)
+        self.rogues.append(r)
+        return r
+
     def wait_ready(self, *nodes, timeout_ms=20000):
         for n in nodes:
             ok = self.wait_for(lambda: n.link_up() and n.get("/", 2000).status_code == 200, timeout_ms)
@@ -199,6 +258,8 @@ class Swarm:
     def shutdown(self):
         for n in self.nodes:
             n.kill()
+        for r in self.rogues:
+            r.kill()
 
 
 def remote_entry(servers, node):

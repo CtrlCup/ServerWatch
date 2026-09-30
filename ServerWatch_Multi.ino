@@ -9,6 +9,7 @@
 #include <esp_idf_version.h>
 #include <vector>
 #include <map>
+#include <algorithm>
 
 // ========================================
 // KONFIGURATIONSVARIABLEN - BITTE ANPASSEN
@@ -46,22 +47,29 @@ const char* mdnsServiceName = "serverwatch";      // mDNS Service Name für Auto
 // ENDE DER KONFIGURATIONSVARIABLEN
 // ========================================
 
-const char* firmwareVersion = "1.0.8";
+const char* firmwareVersion = "1.0.9";
 
 // Webserver und WebSocket
 WebServer server(80);
 WebSocketsServer webSocket = WebSocketsServer(81);
 
-// Remote ESP Struktur
+// Remote ESP Struktur (Schlüssel in remoteESPs ist die eindeutige id)
 struct RemoteESP {
+    String id;             // MAC-Adresse ohne Doppelpunkte, eindeutig pro ESP
     String hostname;
     String ip;
     String serverName;
+    String serverIP;
+    int serverPort;
+    bool hasReset;
+    String version;
     bool serverOnline;
     bool serverPower;
     bool powerSense;
     bool espReachable;
     unsigned long lastSeen;
+    unsigned long uptime;
+    int rssi;
     int pingTime;
 };
 
@@ -87,6 +95,8 @@ volatile bool localServerReachable = false;
 volatile bool localPowerStatus = false;
 volatile int localPingTime = 0;
 String espHostname;
+String nodeId;                                    // eindeutige ID dieses ESP (MAC ohne Doppelpunkte)
+const unsigned long remoteForgetTimeout = 86400000;  // nicht erreichbare ESPs nach 24 h vergessen
 
 // HTML Template
 const char htmlTemplate[] PROGMEM = R"rawliteral(
@@ -208,15 +218,51 @@ bool checkServerReachable();
 void sendStatusToClients();
 String getStatusJson(const char* type = nullptr);
 
+// Text aus fremden Quellen bereinigen: Steuerzeichen entfernen, Länge begrenzen (UTF-8-sicher)
+String sanitizeText(const String& text, unsigned int maxLen) {
+    String out;
+    for (unsigned int i = 0; i < text.length(); i++) {
+        unsigned char c = text[i];
+        if (c >= 0x20 && c != 0x7f) out += (char)c;
+    }
+    if (out.length() > maxLen) {
+        unsigned int cut = maxLen;
+        while (cut > 0 && ((unsigned char)out[cut] & 0xC0) == 0x80) cut--;  // kein halbes UTF-8-Zeichen
+        out = out.substring(0, cut);
+    }
+    return out;
+}
+
+// Hostname nach RFC 1123: nur a-z, 0-9 und '-', Umlaute umschreiben, MAC-Suffix für Eindeutigkeit
+String makeHostname(const String& name, const String& id) {
+    String base = name;
+    base.toLowerCase();
+    base.replace("ä", "ae"); base.replace("ö", "oe"); base.replace("ü", "ue");
+    base.replace("Ä", "ae"); base.replace("Ö", "oe"); base.replace("Ü", "ue"); base.replace("ß", "ss");
+    String clean;
+    for (unsigned int i = 0; i < base.length() && clean.length() < 20; i++) {
+        char c = base[i];
+        bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
+        if (ok) clean += c;
+        else if (clean.length() > 0 && clean[clean.length() - 1] != '-') clean += '-';
+    }
+    while (clean.endsWith("-")) clean.remove(clean.length() - 1);
+    String host = "serverwatch-";
+    if (clean.length() > 0) host += clean + "-";
+    return host + id.substring(id.length() - 6);
+}
+
 // WiFi Setup
 void setupWiFi() {
     Serial.println("\n=== ServerWatch Multi ESP32 ===");
     Serial.print("Verbinde mit WiFi: ");
     Serial.println(ssid);
     
-    // Hostname generieren
-    espHostname = "ServerWatch-" + String(serverName);
-    espHostname.replace(" ", "_");
+    // Eindeutiger Hostname aus Servername und MAC, z. B. "serverwatch-heimserver-a1b2c3" (Issue #14)
+    nodeId = WiFi.macAddress();
+    nodeId.replace(":", "");
+    nodeId.toLowerCase();
+    espHostname = makeHostname(serverName, nodeId);
     WiFi.setHostname(espHostname.c_str());
     
     // Stellt sicher, dass das WiFi-Modul nicht in den Schlafmodus geht (wichtig für Fritzboxen)
@@ -253,6 +299,7 @@ void setupMDNS() {
     // Service advertisen
     MDNS.addService(mdnsServiceName, "tcp", 80);
     MDNS.addServiceTxt(mdnsServiceName, "tcp", "server", serverName);
+    MDNS.addServiceTxt(mdnsServiceName, "tcp", "id", nodeId.c_str());
     MDNS.addServiceTxt(mdnsServiceName, "tcp", "version", firmwareVersion);
     
     Serial.println("mDNS Service gestartet: " + espHostname);
@@ -285,75 +332,89 @@ void updateLocalStatus() {
     localServerStatus = usePowerSense ? reachable && localPowerStatus : reachable;
 }
 
-// ESP Netzwerk Scan
-void scanForESPs() {
-    Serial.println("Scanne nach ServerWatch ESPs...");
-    
-    int n = MDNS.queryService(mdnsServiceName, "tcp");
-    
-    if (n == 0) {
-        Serial.println("Keine anderen ServerWatch ESPs gefunden");
-        return;
+// Gültige Knoten-ID: genau 12 Hex-Zeichen (MAC ohne Doppelpunkte, klein)
+bool isValidNodeId(const String& id) {
+    if (id.length() != 12) return false;
+    for (unsigned int i = 0; i < id.length(); i++) {
+        char c = id[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
     }
-    
-    Serial.printf("%d ServerWatch ESP(s) gefunden:\n", n);
-    
-    for (int i = 0; i < n; ++i) {
-        String hostname = MDNS.hostname(i);
-        IPAddress ip = MDNS.IP(i);
-        
-        // Nicht uns selbst hinzufügen
-        if (hostname == espHostname) continue;
-        
-        Serial.printf("  - %s (%s)\n", hostname.c_str(), ip.toString().c_str());
-        
-        // Remote ESP Status abrufen
-        HTTPClient http;
-        http.begin("http://" + ip.toString() + "/api/localstatus");
-        http.setConnectTimeout(1000);
-        http.setTimeout(2000);
-        
-        int httpCode = http.GET();
-        
-        esp_task_wdt_reset();
-        if (httpCode == 200) {
-            String payload = http.getString();
-            DynamicJsonDocument doc(512);
-            
-            if (deserializeJson(doc, payload) == DeserializationError::Ok) {
-                RemoteESP esp;
-                esp.hostname = hostname;
-                esp.ip = ip.toString();
-                esp.serverName = doc["serverName"].as<String>();
-                esp.serverOnline = doc["serverOnline"];
-                esp.serverPower = doc["serverPower"] | false;
-                esp.powerSense = doc["powerSense"] | true;
-                esp.pingTime = doc["pingTime"];
-                esp.espReachable = true;
-                esp.lastSeen = millis();
-                
-                xSemaphoreTake(remoteMutex, portMAX_DELAY);
-                remoteESPs[hostname] = esp;
-                xSemaphoreGive(remoteMutex);
-            }
-        } else {
-            // ESP nicht erreichbar markieren
-            xSemaphoreTake(remoteMutex, portMAX_DELAY);
-            if (remoteESPs.find(hostname) != remoteESPs.end()) {
-                remoteESPs[hostname].espReachable = false;
-            }
-            xSemaphoreGive(remoteMutex);
+    return true;
+}
+
+// Status eines anderen ESP per HTTP abfragen
+bool fetchRemoteStatus(const String& ip, RemoteESP& esp) {
+    HTTPClient http;
+    http.begin("http://" + ip + "/api/localstatus");
+    http.setConnectTimeout(1000);
+    http.setTimeout(2000);
+    int httpCode = http.GET();
+    bool ok = false;
+    if (httpCode == 200) {
+        DynamicJsonDocument doc(1024);
+        if (deserializeJson(doc, http.getString()) == DeserializationError::Ok && doc["id"].is<const char*>()) {
+            esp.id = sanitizeText(doc["id"].as<String>(), 16);
+            esp.hostname = sanitizeText(doc["hostname"] | "", 63);
+            esp.ip = ip;
+            esp.serverName = sanitizeText(doc["serverName"] | "", 32);
+            esp.serverIP = sanitizeText(doc["serverIP"] | "", 45);
+            esp.serverPort = doc["serverPort"] | 0;
+            esp.hasReset = doc["hasReset"] | false;
+            esp.version = sanitizeText(doc["version"] | "", 16);
+            esp.serverOnline = doc["serverOnline"] | false;
+            esp.serverPower = doc["serverPower"] | false;
+            esp.powerSense = doc["powerSense"] | true;
+            esp.pingTime = doc["pingTime"] | 0;
+            esp.uptime = doc["uptime"] | 0UL;
+            esp.rssi = doc["rssi"] | 0;
+            ok = isValidNodeId(esp.id);
         }
-        
-        http.end();
     }
-    
-    // Alte ESPs entfernen (nicht mehr im Netzwerk)
+    http.end();
+    return ok;
+}
+
+// ESP Netzwerk Scan: per mDNS gefundene und bereits bekannte ESPs abfragen (Issues #14, #15)
+void scanForESPs() {
+    std::vector<String> candidates;
+    int n = MDNS.queryService(mdnsServiceName, "tcp");
+    for (int i = 0; i < n; ++i) {
+        IPAddress ip = MDNS.IP(i);
+        if (ip == WiFi.localIP()) continue;  // uns selbst über die IP erkennen, nicht über den Hostnamen
+        candidates.push_back(ip.toString());
+    }
+    // Bekannte ESPs auch dann abfragen, wenn sie in dieser Runde nicht per mDNS antworten
+    xSemaphoreTake(remoteMutex, portMAX_DELAY);
+    for (auto& known : remoteESPs) {
+        if (std::find(candidates.begin(), candidates.end(), known.second.ip) == candidates.end()) {
+            candidates.push_back(known.second.ip);
+        }
+    }
+    xSemaphoreGive(remoteMutex);
+
+    std::vector<String> reached;
+    for (const String& ip : candidates) {
+        RemoteESP esp;
+        bool ok = fetchRemoteStatus(ip, esp);
+        esp_task_wdt_reset();
+        if (!ok || esp.id == nodeId) continue;
+        esp.espReachable = true;
+        esp.lastSeen = millis();
+        xSemaphoreTake(remoteMutex, portMAX_DELAY);
+        remoteESPs[esp.id] = esp;
+        xSemaphoreGive(remoteMutex);
+        reached.push_back(esp.id);
+    }
+
+    // Nicht erreichte ESPs als "nicht erreichbar" markieren, erst nach 24 h vergessen
     xSemaphoreTake(remoteMutex, portMAX_DELAY);
     auto it = remoteESPs.begin();
     while (it != remoteESPs.end()) {
-        if (millis() - it->second.lastSeen > 60000) { // 60 Sekunden Timeout
-            Serial.println("Entferne inaktiven ESP: " + it->first);
+        if (std::find(reached.begin(), reached.end(), it->first) == reached.end()) {
+            if (it->second.espReachable) Serial.println("ESP nicht erreichbar: " + it->second.hostname);
+            it->second.espReachable = false;
+        }
+        if (millis() - it->second.lastSeen > remoteForgetTimeout) {
             it = remoteESPs.erase(it);
         } else {
             ++it;
@@ -364,37 +425,52 @@ void scanForESPs() {
 
 // JSON Status für alle Server erstellen: {"servers":{...}}, mit type zusätzlich {"type":...}
 String getStatusJson(const char* type) {
-    DynamicJsonDocument doc(4096);
+    DynamicJsonDocument doc(8192);
     if (type) doc["type"] = type;
     JsonObject servers = doc.createNestedObject("servers");
     
     // Lokaler Server
     JsonObject local = servers.createNestedObject("local");
     local["isLocal"] = true;
+    local["id"] = nodeId;
+    local["hostname"] = espHostname;
     local["serverName"] = serverName;
     local["serverIP"] = serverIP;
+    local["serverPort"] = serverCheckPort;
     local["espIP"] = WiFi.localIP().toString();
     local["serverOnline"] = localServerStatus;
     if (usePowerSense) local["serverPower"] = localPowerStatus;
     else local["serverPower"] = nullptr;
     local["espReachable"] = true;
     local["pingTime"] = localPingTime;
+    local["hasReset"] = RESET_BUTTON_PIN != -1;
+    local["version"] = firmwareVersion;
     
     // Remote Server
     xSemaphoreTake(remoteMutex, portMAX_DELAY);
-    for (auto& esp : remoteESPs) {
-        JsonObject remote = servers.createNestedObject(esp.first);
+    for (auto& entry : remoteESPs) {
+        const RemoteESP& esp = entry.second;
+        JsonObject remote = servers.createNestedObject(entry.first);
         remote["isLocal"] = false;
-        remote["serverName"] = esp.second.serverName;
-        remote["serverIP"] = "Remote";
-        remote["espIP"] = esp.second.ip;
-        remote["serverOnline"] = esp.second.serverOnline;
-        if (esp.second.powerSense) remote["serverPower"] = esp.second.serverPower;
+        remote["id"] = esp.id;
+        remote["hostname"] = esp.hostname;
+        remote["serverName"] = esp.serverName;
+        remote["serverIP"] = esp.serverIP;
+        remote["serverPort"] = esp.serverPort;
+        remote["espIP"] = esp.ip;
+        remote["serverOnline"] = esp.serverOnline;
+        if (esp.powerSense) remote["serverPower"] = esp.serverPower;
         else remote["serverPower"] = nullptr;
-        remote["espReachable"] = esp.second.espReachable;
-        remote["pingTime"] = esp.second.pingTime;
+        remote["espReachable"] = esp.espReachable;
+        remote["lastSeenAgo"] = millis() - esp.lastSeen;
+        remote["pingTime"] = esp.pingTime;
+        remote["hasReset"] = esp.hasReset;
+        remote["version"] = esp.version;
+        remote["uptime"] = esp.uptime;
+        remote["rssi"] = esp.rssi;
     }
     xSemaphoreGive(remoteMutex);
+    if (doc.overflowed()) Serial.println("Warnung: Status-JSON zu groß, Einträge fehlen");
     
     String output;
     serializeJson(doc, output);
@@ -541,13 +617,21 @@ void setupWebServer() {
     });
     
     server.on("/api/localstatus", []() {
-        DynamicJsonDocument doc(256);
+        DynamicJsonDocument doc(768);
+        doc["id"] = nodeId;
+        doc["hostname"] = espHostname;
         doc["serverName"] = serverName;
+        doc["serverIP"] = serverIP;
+        doc["serverPort"] = serverCheckPort;
         doc["serverOnline"] = localServerStatus;
         if (usePowerSense) doc["serverPower"] = localPowerStatus;
         else doc["serverPower"] = nullptr;
         doc["powerSense"] = usePowerSense;
         doc["pingTime"] = localPingTime;
+        doc["hasReset"] = RESET_BUTTON_PIN != -1;
+        doc["version"] = firmwareVersion;
+        doc["uptime"] = millis();
+        doc["rssi"] = WiFi.RSSI();
         
         String output;
         serializeJson(doc, output);

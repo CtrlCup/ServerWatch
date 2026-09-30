@@ -83,11 +83,21 @@ def test_dashboard_escapes_remote_server_name(swarm, tmp_path):
     assert any(c["title"] == evil for c in r["cards"]), [c["title"] for c in r["cards"]]
 
 
-@known_bug("dashboard-xss")
-def test_dashboard_hostname_cannot_break_out_of_onclick(swarm, tmp_path):
-    """Der mDNS-Hostname dient als Schluessel und wird in onclick="powerAction('<key>',...)"
-    eingesetzt. Ein Hostname mit ' bricht aus dem String aus und fuehrt Code aus."""
-    evil = "x');window.__xss=1;('"
-    a, b = discovered_pair(swarm, name_b=evil, power=False)
+def rogue_status(**fields):
+    base = {"id": "0a0b0c0d0e0f", "hostname": "serverwatch-evil-0d0e0f", "serverName": "Evil",
+            "serverIP": "10.0.0.1", "serverPort": 80, "serverOnline": False, "serverPower": False,
+            "powerSense": True, "pingTime": 0, "hasReset": True, "version": "1.0", "uptime": 1, "rssi": -50}
+    base.update(fields)
+    return base
+
+
+def test_dashboard_key_cannot_break_out_of_onclick(swarm, tmp_path):
+    """Der Schluessel eines Remote-ESP (seine id) darf keinen Code einschleusen, auch wenn
+    ein gefaelschtes Geraet eine praeparierte id schickt (Issues #7, #14)."""
+    a = swarm.add("Alpha")
+    swarm.wait_ready(a)
+    evil = swarm.add_rogue("serverwatch-evil", {"/api/localstatus": (200, rogue_status(id="');__xss=1;('"))})
+    swarm.sleep(DISCOVERY_MS)
     r = render(tmp_path, a, click=[".card .btn-primary"])
-    assert r["xss"] is False, "Code aus dem Hostnamen wurde beim Klick ausgefuehrt"
+    assert r["xss"] is False, "Code aus der id wurde beim Klick ausgefuehrt"
+    assert not remote_entry(a.status(), evil)[1], "ESP mit ungueltiger id wurde uebernommen"

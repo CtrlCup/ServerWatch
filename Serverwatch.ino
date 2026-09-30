@@ -23,7 +23,7 @@ const bool usePowerSense = true; // false, wenn POWER_CHECK_PIN nicht mit dem Ma
 // Zeiteinstellungen
 int onTime = 800; // Zeit wie lange der Ausgang bestromt werden soll in Millisekunden
 
-const char* firmwareVersion = "1.0.8";
+const char* firmwareVersion = "1.0.9";
 
 WebServer server(80);
 

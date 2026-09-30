@@ -508,6 +508,13 @@ IPAddress WiFiClass::localIP() {
     if (g_link) ip.fromString(sim::node_ip().c_str());
     return ip;
 }
+String WiFiClass::macAddress() {
+    IPAddress ip;
+    ip.fromString(sim::node_ip().c_str());
+    char buf[18];
+    snprintf(buf, sizeof buf, "24:0A:C4:%02X:%02X:%02X", ip[1], ip[2], ip[3]);
+    return String(buf);
+}
 int8_t WiFiClass::RSSI() {
     if (!g_link) return 0;
     return (int8_t)atoi(sim::read_file(sim::node_dir() + "/rssi", "-60").c_str());

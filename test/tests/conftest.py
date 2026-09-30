@@ -16,9 +16,6 @@ KNOWN_BUGS = {
     "no-auth": 8,
     "csrf": 9,
     "no-node-auth": 10,
-    "duplicate-hostname": 14,
-    "offline-remote-state": 15,
-    "remote-info-incomplete": 16,
     "ws-origin": 18,
 }
 

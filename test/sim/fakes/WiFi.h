@@ -79,7 +79,7 @@ public:
     IPAddress gatewayIP() { return IPAddress(192, 168, 178, 1); }
     IPAddress subnetMask() { return IPAddress(255, 255, 255, 0); }
     IPAddress dnsIP(uint8_t = 0) { return gatewayIP(); }
-    String macAddress() { return String("AA:BB:CC:00:00:01"); }
+    String macAddress();  // pro Sim-Knoten eindeutig (aus der IP abgeleitet)
     String SSID() { return String(ssid_); }
     String BSSIDstr() { return String("11:22:33:44:55:66"); }
     int32_t channel() { return 6; }

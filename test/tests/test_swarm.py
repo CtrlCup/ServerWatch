@@ -53,10 +53,9 @@ def test_three_nodes_full_mesh(swarm):
                 assert swarm.wait_for(lambda: sees(x, y), DISCOVERY_MS), f"{x.name} erkennt {y.name} nicht"
 
 
-@known_bug("duplicate-hostname")
 def test_nodes_with_same_server_name_see_each_other(swarm):
-    """Hostname = 'ServerWatch-' + serverName. Zwei Server mit gleichem Namen (z. B. beide
-    Standardwert 'Heimserver') fuehren zu mDNS-Konflikt und gegenseitigem Ausblenden."""
+    """Regression #14: Zwei Server mit gleichem Namen (z. B. beide Standardwert 'Heimserver')
+    duerfen sich nicht gegenseitig ausblenden (Hostname enthaelt die MAC)."""
     a, b = start_apart(swarm, "Heimserver", "Heimserver")
     assert swarm.wait_for(lambda: sees(a, b), DISCOVERY_MS), "Knoten 1 sieht Knoten 2 nicht"
     assert swarm.wait_for(lambda: sees(b, a), DISCOVERY_MS), "Knoten 2 sieht Knoten 1 nicht"
@@ -74,13 +73,15 @@ def test_remote_status_is_synced(swarm):
     assert entry["pingTime"] > 0
 
 
-@known_bug("remote-info-incomplete")
 def test_remote_server_ip_is_synced(swarm):
-    """Das Dashboard zeigt fuer entfernte Server 'Remote' statt der ueberwachten IP."""
+    """Regression #16: Entfernte Server liefern ihre ueberwachte IP und weitere Daten."""
     a, b = start_apart(swarm, "Alpha", "Beta")
     entry = swarm.wait_for(lambda: sees(a, b), DISCOVERY_MS)
     assert entry, "Alpha erkennt Beta nicht"
     assert entry["serverIP"] == "192.168.178.1"
+    assert entry["serverPort"] == 80
+    assert entry["hasReset"] is True
+    assert entry["version"] and entry["id"] and entry["hostname"].startswith("serverwatch-beta-")
 
 
 def test_remote_change_propagates_to_api(swarm):
@@ -119,10 +120,9 @@ def test_websocket_sends_periodic_updates(swarm):
     assert all(m["type"] == "update" for m in msgs)
 
 
-@known_bug("offline-remote-state")
 def test_offline_remote_is_marked_unreachable(swarm):
-    """Faellt ein ESP aus, soll er als 'Nicht erreichbar' angezeigt werden, statt bis zu 60 s
-    lang mit veralteten Daten als erreichbar zu gelten und danach kommentarlos zu verschwinden."""
+    """Regression #15: Ein ausgefallener ESP wird als 'nicht erreichbar' angezeigt und
+    verschwindet nicht nach 60 s aus dem Dashboard."""
     a, b = start_apart(swarm, "Alpha", "Beta")
     assert swarm.wait_for(lambda: sees(a, b), DISCOVERY_MS)
     b.kill()
@@ -204,3 +204,31 @@ def test_shutdown_refused_when_server_off(swarm):
     r = a.post("/control", json={"target": "local", "action": "shutdown"})
     assert r.status_code == 409
     assert not a.pulses(POWER_BUTTON_PIN)
+
+
+def test_hostnames_are_unique_and_dns_safe(swarm):
+    """Issue #14: Hostname nach RFC 1123 (a-z, 0-9, '-') mit MAC-Suffix."""
+    a, b = start_apart(swarm, "Proxmox Node 2", "Größter Server!")
+    ha = a.status()["local"]["hostname"]
+    hb = b.status()["local"]["hostname"]
+    assert ha.startswith("serverwatch-proxmox-node-2-") and len(ha) <= 63
+    assert hb.startswith("serverwatch-groesster-server-")
+    assert ha != hb
+    import re
+    assert re.fullmatch(r"[a-z0-9-]+", ha) and re.fullmatch(r"[a-z0-9-]+", hb)
+
+
+def test_remote_values_are_sanitized(swarm):
+    """Fremde Werte werden beim Empfaenger gekuerzt und von Steuerzeichen befreit."""
+    a, b = start_apart(swarm, "Alpha", "B" * 80 + "\x01\x7f")
+    entry = swarm.wait_for(lambda: sees(a, b), DISCOVERY_MS)
+    assert entry and entry["serverName"] == "B" * 32
+
+
+def test_recovered_remote_is_reachable_again(swarm):
+    a, b = start_apart(swarm, "Alpha", "Beta")
+    assert swarm.wait_for(lambda: sees(a, b), DISCOVERY_MS)
+    b.set_ap(False)
+    assert swarm.wait_for(lambda: sees(a, b)["espReachable"] is False, 30000)
+    b.set_ap(True)
+    assert swarm.wait_for(lambda: sees(a, b)["espReachable"] is True, 40000)
