@@ -30,3 +30,9 @@ Thumbs.db
 # Temporary files
 *.bak
 *.old
+
+# Tests
+test/.build/
+test/sim/.deps/
+test/js/node_modules/
+__pycache__/

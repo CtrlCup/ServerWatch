@@ -1,0 +1,9 @@
+{
+  "name": "serverwatch-dashboard-tests",
+  "private": true,
+  "type": "module",
+  "description": "Rendert das ServerWatch-Dashboard in jsdom fuer die pytest-Suite",
+  "dependencies": {
+    "jsdom": "^26.1.0"
+  }
+}
