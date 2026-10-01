@@ -51,6 +51,7 @@ const int POWER_CHECK_PIN = 4;                    // Pin zum Prüfen der Spannun
 const int POWER_BUTTON_PIN = 3;                   // Pin zum Server Ein/Ausschalten
 const int RESET_BUTTON_PIN = 5;                   // Pin zum Server Reset (optional, -1 wenn nicht verwendet)
 const bool usePowerSense = true;                  // false, wenn POWER_CHECK_PIN nicht mit dem Mainboard verbunden ist
+const bool reduceTxPower = false;                 // true senkt die WLAN-Sendeleistung auf 8,5 dBm (hilft z. B. beim ESP32-C3 Super Mini mit schwacher Antenne, Issue #23)
 
 // Timing Konfiguration
 const int powerButtonTime = 800;                  // Millisekunden für Power-Button Druck
@@ -69,7 +70,7 @@ const char* mdnsServiceName = "serverwatch";      // mDNS Service Name für Auto
 // ENDE DER KONFIGURATIONSVARIABLEN
 // ========================================
 
-const char* firmwareVersion = "1.0.11";
+const char* firmwareVersion = "1.0.12";
 
 // Webserver und WebSocket
 WebServer server(80);
@@ -112,6 +113,10 @@ unsigned long lastWiFiCheck = 0;
 const unsigned long wifiCheckInterval = 10000;
 bool wifiLost = false;
 unsigned long wifiLostSince = 0;
+// Diagnose (Issue #23): Zähler werden im WLAN-Event-Task geschrieben, daher volatile
+volatile uint32_t wifiDisconnects = 0;
+volatile uint8_t lastDisconnectReason = 0;
+unsigned long maxLoopMs = 0;
 volatile bool localServerStatus = false;
 volatile bool localServerReachable = false;
 volatile bool localPowerStatus = false;
@@ -174,6 +179,29 @@ String makeHostname(const String& name, const String& id) {
     return host + id.substring(id.length() - 6);
 }
 
+// WLAN-Ereignisse mitschreiben (Issue #23). Läuft im Event-Task: nichts Blockierendes, keine WiFi-Aufrufe
+void onWiFiEvent(arduino_event_id_t event, arduino_event_info_t info) {
+    if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+        uint8_t reason = info.wifi_sta_disconnected.reason;
+        Serial.printf("WiFi getrennt, Grund %u (%s)\n", reason, WiFi.disconnectReasonName((wifi_err_reason_t)reason));
+        // Grund 8 (ASSOC_LEAVE) löst unser eigenes WiFi.disconnect() im Reconnect-Fallback aus: nicht zählen
+        if (reason != WIFI_REASON_ASSOC_LEAVE) {
+            wifiDisconnects++;
+            lastDisconnectReason = reason;
+        }
+    } else if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
+        Serial.println("WiFi: IP erhalten");
+    } else if (event == ARDUINO_EVENT_WIFI_STA_LOST_IP) {
+        Serial.println("WiFi: IP verloren");
+    }
+}
+
+// WLAN starten; mit reduceTxPower danach die Sendeleistung senken (Issue #23)
+void startWiFi() {
+    WiFi.begin(ssid, password);
+    if (reduceTxPower) WiFi.setTxPower(WIFI_POWER_8_5dBm);
+}
+
 // WiFi Setup
 void setupWiFi() {
     Serial.println("\n=== ServerWatch Multi ESP32 ===");
@@ -191,7 +219,9 @@ void setupWiFi() {
     WiFi.setSleep(false);
     WiFi.setAutoReconnect(true);
     
-    WiFi.begin(ssid, password);
+    WiFi.onEvent(onWiFiEvent);  // vor WiFi.begin() registrieren, damit kein Ereignis fehlt (Issue #23)
+    startWiFi();
+    if (reduceTxPower) Serial.println("Sendeleistung reduziert (8,5 dBm)");
     
     // Nicht endlos warten: klappt es nicht, übernimmt der Reconnect im loop() (Issue #5)
     unsigned long wifiStart = millis();
@@ -764,6 +794,25 @@ void setupWebServer() {
         server.send(200, "application/json", "{\"token\":\"" + wsToken + "\"}");
     });
     
+    // Diagnose für Feldfehler wie "ESP nicht mehr erreichbar" (Issue #23)
+    server.on("/api/diag", HTTP_GET, []() {
+        if (!requireAuth()) return;
+        DynamicJsonDocument doc(512);
+        doc["uptime_ms"] = millis();
+        doc["reset_reason"] = (int)esp_reset_reason();
+        doc["free_heap"] = ESP.getFreeHeap();
+        doc["min_free_heap"] = ESP.getMinFreeHeap();
+        doc["rssi"] = WiFi.RSSI();
+        doc["wifi_disconnects"] = wifiDisconnects;
+        doc["last_disconnect_reason"] = lastDisconnectReason;
+        doc["max_loop_ms"] = maxLoopMs;
+        doc["version"] = firmwareVersion;
+        String json;
+        serializeJson(doc, json);
+        server.sendHeader("Cache-Control", "no-store");
+        server.send(200, "application/json", json);
+    });
+    
     // API Endpoints für andere ESPs (Schwarm-Schlüssel statt Login)
     server.on("/api/nonce", []() {
         if (!checkHost()) return;
@@ -924,6 +973,7 @@ void setup() {
 
 // Main Loop
 void loop() {
+    unsigned long loopStart = millis();  // Dauer dieses Durchlaufs für /api/diag (Issue #23)
     server.handleClient();
     webSocket.loop();
     releaseButtonIfDue();
@@ -943,7 +993,7 @@ void loop() {
             }
             Serial.println("WiFi Verbindung verloren! Versuche neu zu verbinden...");
             WiFi.disconnect();
-            WiFi.begin(ssid, password);
+            startWiFi();
         } else {
             wifiLost = false;
         }
@@ -954,4 +1004,7 @@ void loop() {
         lastStatusBroadcast = currentMillis;
         sendStatusToClients();
     }
+    
+    unsigned long loopMs = millis() - loopStart;
+    if (loopMs > maxLoopMs) maxLoopMs = loopMs;
 }

@@ -23,13 +23,13 @@ typedef enum {
 typedef enum { WIFI_PS_NONE, WIFI_PS_MIN_MODEM, WIFI_PS_MAX_MODEM } wifi_ps_type_t;
 
 // Trennungsgruende (Auszug aus esp_wifi_types.h)
-enum {
+typedef enum {
     WIFI_REASON_UNSPECIFIED = 1, WIFI_REASON_AUTH_EXPIRE = 2, WIFI_REASON_AUTH_LEAVE = 3, WIFI_REASON_ASSOC_EXPIRE = 4,
     WIFI_REASON_ASSOC_TOOMANY = 5, WIFI_REASON_NOT_AUTHED = 6, WIFI_REASON_NOT_ASSOCED = 7, WIFI_REASON_ASSOC_LEAVE = 8,
     WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT = 15, WIFI_REASON_GROUP_KEY_UPDATE_TIMEOUT = 16, WIFI_REASON_BEACON_TIMEOUT = 200,
     WIFI_REASON_NO_AP_FOUND = 201, WIFI_REASON_AUTH_FAIL = 202, WIFI_REASON_ASSOC_FAIL = 203,
     WIFI_REASON_HANDSHAKE_TIMEOUT = 204, WIFI_REASON_CONNECTION_FAIL = 205
-};
+} wifi_err_reason_t;
 
 typedef enum {
     ARDUINO_EVENT_WIFI_READY = 0, ARDUINO_EVENT_WIFI_SCAN_DONE, ARDUINO_EVENT_WIFI_STA_START, ARDUINO_EVENT_WIFI_STA_STOP,
@@ -84,7 +84,7 @@ public:
     String BSSIDstr() { return String("11:22:33:44:55:66"); }
     int32_t channel() { return 6; }
     int8_t RSSI();
-    static const char* disconnectReasonName(int reason);
+    static const char* disconnectReasonName(wifi_err_reason_t reason);
 
     wifi_event_id_t onEvent(WiFiEventCb cb, arduino_event_id_t event = ARDUINO_EVENT_MAX);
     wifi_event_id_t onEvent(WiFiEventFuncCb cb, arduino_event_id_t event = ARDUINO_EVENT_MAX);

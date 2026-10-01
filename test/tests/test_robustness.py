@@ -3,6 +3,8 @@
 Hintergrund zum gemeldeten Fehler "ESP nach einer Weile nicht mehr erreichbar, erst Strom
 trennen hilft": siehe die Tests zu blockierendem Server-Check, WLAN und Watchdog.
 """
+import os
+import re
 import socket
 import time
 
@@ -10,7 +12,7 @@ import pytest
 import requests
 
 from conftest import known_bug
-from simnet import ws_messages
+from simnet import ROOT, ws_messages
 
 
 def probe(swarm, node, duration_ms, every_ms=2000, timeout_ms=3000, path="/api/status"):
@@ -205,3 +207,48 @@ def test_single_without_power_sense(swarm):
     swarm.wait_ready(n)
     s = swarm.wait_for(lambda: (lambda j: j if j["online"] else None)(n.get("/status").json()), 10000)
     assert s == {"online": True, "reachable": True, "power": None}
+
+
+SKETCHES = ["ServerWatch_Multi", "Serverwatch"]
+DIAG_KEYS = {"uptime_ms", "reset_reason", "free_heap", "min_free_heap", "rssi", "wifi_disconnects",
+             "last_disconnect_reason", "max_loop_ms", "version"}
+
+
+def sketch_version(sketch):
+    with open(os.path.join(ROOT, sketch + ".ino")) as f:
+        return re.search(r'firmwareVersion\s*=\s*"([^"]+)"', f.read()).group(1)
+
+
+@pytest.mark.parametrize("sketch", SKETCHES)
+def test_diag_reports_plausible_values_and_wifi_drop(swarm, sketch):
+    """Issue #23: /api/diag liefert Diagnosewerte; eine WLAN-Trennung (Grund 15) wird gezaehlt und
+    bleibt auch nach dem eigenen disconnect() des Reconnect-Fallbacks (Grund 8, ignoriert) stehen."""
+    a = swarm.add("Alpha", sketch=sketch)
+    swarm.wait_ready(a)
+    swarm.sleep(2000)
+    d = a.get("/api/diag").json()
+    assert set(d) == DIAG_KEYS
+    assert all(isinstance(d[k], int) and not isinstance(d[k], bool) for k in DIAG_KEYS - {"version", "max_loop_ms"})
+    assert isinstance(d["max_loop_ms"], (int, float)) and 0 <= d["max_loop_ms"] < 1000
+    assert d["uptime_ms"] > 0 and d["reset_reason"] == 1 and d["free_heap"] > 0 and d["rssi"] < 0
+    assert (d["wifi_disconnects"], d["last_disconnect_reason"]) == (0, 0)
+    assert d["version"] == sketch_version(sketch)
+
+    a.set_ap(False, drop_reason=15, attempt_reason=15)
+    assert swarm.wait_for(lambda: not a.link_up(), 5000)
+    swarm.sleep(15000)  # laenger als 10 s: Fallback ruft WiFi.disconnect() (Grund 8)
+    a.set_ap(True)
+    assert swarm.wait_for(lambda: a.link_up() and a.get("/api/diag", 2000).ok, 30000)
+    d = a.get("/api/diag").json()
+    assert d["wifi_disconnects"] >= 1
+    assert d["last_disconnect_reason"] == 15
+
+
+@pytest.mark.parametrize("sketch", SKETCHES)
+def test_reduce_tx_power_option(swarm, sketch):
+    """Issue #23: reduceTxPower senkt die Sendeleistung nach WiFi.begin() und meldet das seriell."""
+    default = swarm.add("Alpha", sketch=sketch)
+    reduced = swarm.add("Beta", sketch=sketch, cfg={"reduceTxPower": "true"})
+    swarm.wait_ready(default, reduced)
+    assert "Sendeleistung" in reduced.serial()
+    assert "Sendeleistung" not in default.serial()

@@ -8,7 +8,7 @@ import secrets
 import pytest
 import requests
 
-from simnet import POWER_BUTTON_PIN, RESET_BUTTON_PIN, SWARM_KEY, hmac_hex, remote_entry, ws_messages
+from simnet import POWER_BUTTON_PIN, RESET_BUTTON_PIN, SWARM_KEY, WEB_PASSWORD, hmac_hex, remote_entry, ws_messages
 
 DISCOVERY_MS = 40000
 
@@ -45,7 +45,7 @@ def test_malformed_authorization_header_is_rejected(swarm, node):
     assert no_press(swarm, node)
 
 
-@pytest.mark.parametrize("path", ["/", "/api/status", "/api/wstoken"])
+@pytest.mark.parametrize("path", ["/", "/api/status", "/api/wstoken", "/api/diag"])
 def test_read_endpoints_require_authentication(node, path):
     assert node.get(path, auth=None).status_code == 401
     assert node.get(path).status_code == 200
@@ -65,6 +65,18 @@ def test_wstoken_is_not_cached(node):
     assert len(r.json()["token"]) == 32
 
 
+def test_diag_is_not_cached_not_cross_origin_and_leaks_no_secrets(node):
+    for headers in ({}, {"Origin": "http://evil.example"}):
+        r = node.get("/api/diag", headers=headers)
+        assert r.status_code == 200
+        assert r.headers.get("Cache-Control") == "no-store"
+        assert r.headers.get("Content-Type", "").startswith("application/json")
+        assert not [h for h in r.headers if h.lower().startswith("access-control-allow-")]
+        for secret in ("DEIN_WLAN_NAME", "DEIN_WLAN_PASSWORT", WEB_PASSWORD, SWARM_KEY, node.ws_token()):
+            assert secret not in r.text
+    assert node.post("/api/diag", json={}).status_code in (404, 405)
+
+
 def test_default_credentials_are_flagged(swarm):
     """Ohne eigenes Web-Passwort (secrets.h) meldet das Dashboard die Standard-Zugangsdaten."""
     n = swarm.add("Alpha", cfg={"webUser": None, "webPassword": None})
@@ -81,7 +93,7 @@ def test_single_requires_authentication(swarm):
     swarm.set_server("refused")
     n = swarm.add("Solo", sketch="Serverwatch", power=False)
     swarm.wait_ready(n)
-    for path in ["/", "/status"]:
+    for path in ["/", "/status", "/api/diag"]:
         assert n.get(path, auth=None).status_code == 401, path
     r = n.post("/poweron", auth=None, json={})
     assert r.status_code == 401
@@ -122,7 +134,7 @@ def test_control_accepts_own_origin(swarm, node):
 
 def test_dns_rebinding_host_is_rejected(swarm, node):
     """Fremde Domain zeigt per DNS-Rebinding auf den ESP: Host und Origin lauten beide evil."""
-    for path, method in [("/control", "POST"), ("/api/status", "GET"), ("/api/nonce", "GET"), ("/", "GET")]:
+    for path, method in [("/control", "POST"), ("/api/status", "GET"), ("/api/nonce", "GET"), ("/api/diag", "GET"), ("/", "GET")]:
         r = node.request(method, path, headers={"Host": "evil.example", "Origin": "http://evil.example"},
                          json={"target": "local", "action": "power"} if method == "POST" else None)
         assert r.status_code in (403, 421), (path, r.status_code)
