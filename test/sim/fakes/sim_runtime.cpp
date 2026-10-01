@@ -524,7 +524,7 @@ int8_t WiFiClass::RSSI() {
     if (!g_link) return 0;
     return (int8_t)atoi(sim::read_file(sim::node_dir() + "/rssi", "-60").c_str());
 }
-const char* WiFiClass::disconnectReasonName(int reason) {
+const char* WiFiClass::disconnectReasonName(wifi_err_reason_t reason) {
     switch (reason) {
         case 2: return "AUTH_EXPIRE"; case 3: return "AUTH_LEAVE"; case 4: return "ASSOC_EXPIRE"; case 8: return "ASSOC_LEAVE";
         case 15: return "4WAY_HANDSHAKE_TIMEOUT"; case 200: return "BEACON_TIMEOUT"; case 201: return "NO_AP_FOUND";

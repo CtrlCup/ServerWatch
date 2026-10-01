@@ -36,11 +36,12 @@ const int checkPort = 80;                 // Auf welchen Port soll geprüft werd
 const int POWER_CHECK_PIN = 4;  // Pin zum Prüfen der Spannung (Mainboard)
 const int POWER_BUTTON_PIN = 3; // Pin zum Durchschalten (Startknopf)
 const bool usePowerSense = true; // false, wenn POWER_CHECK_PIN nicht mit dem Mainboard verbunden ist
+const bool reduceTxPower = false; // true senkt die WLAN-Sendeleistung auf 8,5 dBm (hilft z. B. beim ESP32-C3 Super Mini mit schwacher Antenne, Issue #23)
 
 // Zeiteinstellungen
 int onTime = 800; // Zeit wie lange der Ausgang bestromt werden soll in Millisekunden
 
-const char* firmwareVersion = "1.0.11";
+const char* firmwareVersion = "1.0.12";
 
 WebServer server(80);
 
@@ -57,6 +58,11 @@ const unsigned long wifiBootTimeout = 20000;      // So lange (ms) wartet setup(
 bool wifiLost = false;
 String espHostname;
 unsigned long wifiLostSince = 0;
+
+// Diagnose (Issue #23): Zähler werden im WLAN-Event-Task geschrieben, daher volatile
+volatile uint32_t wifiDisconnects = 0;
+volatile uint8_t lastDisconnectReason = 0;
+unsigned long maxLoopMs = 0;
 
 
 bool checkServerReachable() {
@@ -376,6 +382,22 @@ void handleStatus() {
   server.send(200, "application/json", json);
 }
 
+void handleDiag() {
+  if (!requireAuth()) return;
+  // Diagnose für Feldfehler wie "ESP nicht mehr erreichbar" (Issue #23)
+  String json = "{\"uptime_ms\":" + String(millis()) +
+                ",\"reset_reason\":" + String((int)esp_reset_reason()) +
+                ",\"free_heap\":" + String(ESP.getFreeHeap()) +
+                ",\"min_free_heap\":" + String(ESP.getMinFreeHeap()) +
+                ",\"rssi\":" + String(WiFi.RSSI()) +
+                ",\"wifi_disconnects\":" + String(wifiDisconnects) +
+                ",\"last_disconnect_reason\":" + String(lastDisconnectReason) +
+                ",\"max_loop_ms\":" + String(maxLoopMs) +
+                ",\"version\":\"" + String(firmwareVersion) + "\"}";
+  server.sendHeader("Cache-Control", "no-store");
+  server.send(200, "application/json", json);
+}
+
 void handlePowerOn() {
   if (!requireAuth() || !checkJsonWrite()) return;
   // Kein Power-Druck bei laufendem Server: das würde ihn herunterfahren (Issue #11)
@@ -388,6 +410,29 @@ void handlePowerOn() {
   digitalWrite(POWER_BUTTON_PIN, LOW);
   
   server.send(200, "application/json", "{\"success\":true}");
+}
+
+// WLAN-Ereignisse mitschreiben (Issue #23). Läuft im Event-Task: nichts Blockierendes, keine WiFi-Aufrufe
+void onWiFiEvent(arduino_event_id_t event, arduino_event_info_t info) {
+  if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+    uint8_t reason = info.wifi_sta_disconnected.reason;
+    Serial.printf("WiFi getrennt, Grund %u (%s)\n", reason, WiFi.disconnectReasonName((wifi_err_reason_t)reason));
+    // Grund 8 (ASSOC_LEAVE) löst unser eigenes WiFi.disconnect() im Reconnect-Fallback aus: nicht zählen
+    if (reason != WIFI_REASON_ASSOC_LEAVE) {
+      wifiDisconnects++;
+      lastDisconnectReason = reason;
+    }
+  } else if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
+    Serial.println("WiFi: IP erhalten");
+  } else if (event == ARDUINO_EVENT_WIFI_STA_LOST_IP) {
+    Serial.println("WiFi: IP verloren");
+  }
+}
+
+// WLAN starten; mit reduceTxPower danach die Sendeleistung senken (Issue #23)
+void startWiFi() {
+  WiFi.begin(ssid, password);
+  if (reduceTxPower) WiFi.setTxPower(WIFI_POWER_8_5dBm);
 }
 
 void setup() {
@@ -416,7 +461,9 @@ void setup() {
   WiFi.setSleep(false);
   WiFi.setAutoReconnect(true);
   
-  WiFi.begin(ssid, password);
+  WiFi.onEvent(onWiFiEvent);  // vor WiFi.begin() registrieren, damit kein Ereignis fehlt (Issue #23)
+  startWiFi();
+  if (reduceTxPower) Serial.println("Sendeleistung reduziert (8,5 dBm)");
   
   // Nicht endlos warten: klappt es nicht, übernimmt der Reconnect im loop() (Issue #5)
   unsigned long wifiStart = millis();
@@ -437,6 +484,7 @@ void setup() {
   
   server.on("/", handleRoot);
   server.on("/status", handleStatus);
+  server.on("/api/diag", HTTP_GET, handleDiag);
   server.on("/poweron", HTTP_POST, handlePowerOn);  // nur POST: kein Auslösen per Link/<img> (Issue #9)
   
   const char* headerKeys[] = {"Content-Type", "Origin"};
@@ -456,6 +504,7 @@ void setup() {
 }
 
 void loop() {
+  unsigned long loopStart = millis();  // Dauer dieses Durchlaufs für /api/diag (Issue #23)
   server.handleClient();
   
   unsigned long currentMillis = millis();
@@ -473,7 +522,7 @@ void loop() {
       }
       Serial.println("WiFi Verbindung verloren! Versuche neu zu verbinden...");
       WiFi.disconnect();
-      WiFi.begin(ssid, password);
+      startWiFi();
     } else {
       wifiLost = false;
     }
@@ -497,4 +546,7 @@ void loop() {
       lastServerStatus = currentServerStatus;
     }
   }
+  
+  unsigned long loopMs = millis() - loopStart;
+  if (loopMs > maxLoopMs) maxLoopMs = loopMs;
 }
