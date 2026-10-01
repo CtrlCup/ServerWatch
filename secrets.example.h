@@ -7,7 +7,7 @@
 #define WIFI_PASSWORD "DEIN_WLAN_PASSWORT"
 
 // Login für das Web-Interface (HTTP Basic Auth). Ohne eigenes Passwort zeigt das
-// Dashboard eine Warnung an.
+// Dashboard eine Warnung an. Werden nur genutzt, wenn useLogin = true im Sketch gesetzt ist.
 #define WEB_USER "admin"
 #define WEB_PASSWORD "bitte-aendern"
 

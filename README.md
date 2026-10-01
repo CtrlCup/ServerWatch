@@ -77,7 +77,7 @@ Die erweiterte **ServerWatch_Multi.ino** bietet:
 - 🌐 **Netzwerk-Monitoring**: Prüfung der Server-Erreichbarkeit per TCP-Verbindung auf einen frei wählbaren Port
 - ⚡ **Stromüberwachung**: Erkennung der Mainboard-Spannung über einen GPIO (abschaltbar mit `usePowerSense = false`)
 - 🎛️ **Remote Power-On**: Der ESP simuliert einen Druck auf den Power-Button
-- 🔐 **Login und Schutzmaßnahmen**: HTTP Basic Auth, CSRF-Schutz, DNS-Rebinding-Schutz (siehe [Sicherheit](#-sicherheit))
+- 🔐 **Login und Schutzmaßnahmen**: optionaler Login per HTTP Basic Auth (`useLogin`), CSRF-Schutz, DNS-Rebinding-Schutz (siehe [Sicherheit](#-sicherheit))
 - 🛟 **Robust**: Watchdog, automatische WLAN-Wiederverbindung, Diagnose-Endpunkt `/api/diag`
 - 📱 **Responsives Web-Interface**: Dark-Theme für Desktop und Mobil
 - 🔄 **Auto-Refresh**: die Einzel-Version aktualisiert den Status alle 5 Sekunden, die Multi-Version bekommt ihn per WebSocket alle 3 Sekunden
@@ -197,7 +197,7 @@ In der Arduino IDE findest du beide unter Werkzeuge → Bibliotheken verwalten. 
    | Eintrag | Bedeutung |
    |---------|-----------|
    | `WIFI_SSID`, `WIFI_PASSWORD` | dein WLAN (2,4 GHz) |
-   | `WEB_USER`, `WEB_PASSWORD` | Login für das Web-Interface (ohne `secrets.h` gilt `admin` / `serverwatch`, **bitte eigenes Passwort setzen**) |
+   | `WEB_USER`, `WEB_PASSWORD` | Login für das Web-Interface, nur mit `useLogin = true` (ohne `secrets.h` gilt `admin` / `serverwatch`, **bitte eigenes Passwort setzen**) |
    | `SWARM_KEY` | nur Multi: gemeinsamer Schlüssel aller ESPs, mindestens 16 Zeichen, auf allen ESPs identisch. Ohne gültigen Schlüssel bleibt der Schwarm (Erkennung und Fernsteuerung zwischen ESPs) ausgeschaltet. |
 
    Die WLAN-Daten stehen nicht mehr im Sketch. Fehlt `secrets.h`, kompiliert der Sketch mit Platzhaltern, der ESP verbindet sich dann aber nicht.
@@ -284,7 +284,9 @@ const int checkPort = 80;                 // Port für die Erreichbarkeitsprüfu
 const int POWER_CHECK_PIN = 4;            // Eingang: Spannung vom Mainboard
 const int POWER_BUTTON_PIN = 3;           // Ausgang: Power-Button
 const bool usePowerSense = true;          // false, wenn POWER_CHECK_PIN nicht am Mainboard hängt
-const bool reduceTxPower = false;         // true senkt die WLAN-Sendeleistung auf 8,5 dBm
+const bool reduceTxPower = true;          // true senkt die WLAN-Sendeleistung auf 8,5 dBm (Standard)
+const bool useLogin = false;              // true: Login per HTTP Basic Auth, nötig wenn der ESP exponiert ist
+const char* localDomain = "fritz.box";    // lokale DNS-Domain des Routers, "" = keine
 
 // Zeit
 int onTime = 800;                         // Dauer des Button-Drucks in ms
@@ -305,7 +307,9 @@ const int POWER_CHECK_PIN = 4;            // Eingang: Spannung vom Mainboard
 const int POWER_BUTTON_PIN = 3;           // Ausgang: Power-Button
 const int RESET_BUTTON_PIN = 5;           // Ausgang: Reset-Button, -1 wenn nicht benutzt
 const bool usePowerSense = true;          // false, wenn POWER_CHECK_PIN nicht am Mainboard hängt
-const bool reduceTxPower = false;         // true senkt die WLAN-Sendeleistung auf 8,5 dBm
+const bool reduceTxPower = true;          // true senkt die WLAN-Sendeleistung auf 8,5 dBm (Standard)
+const bool useLogin = false;              // true: Login per HTTP Basic Auth, nötig wenn der ESP exponiert ist
+const char* localDomain = "fritz.box";    // lokale DNS-Domain des Routers, "" = keine
 
 // Timing
 const int powerButtonTime = 800;          // Druckdauer Power-Button (ms)
@@ -324,7 +328,7 @@ Der Hostname setzt sich zusammen als `serverwatch-<name>-<letzte 6 Stellen der M
 
 ### Sendeleistung reduzieren
 
-Mit `reduceTxPower = true` senkt der ESP die WLAN-Sendeleistung auf 8,5 dBm. Das kann bei Boards mit schwacher Antenne helfen, zum Beispiel beim ESP32-C3 Super Mini, wenn die Verbindung abreißt. Probiere es aus, wenn du Verbindungsabbrüche beobachtest (siehe [Troubleshooting](#-troubleshooting)).
+`reduceTxPower` ist standardmäßig an (`true`): Der ESP senkt die WLAN-Sendeleistung auf 8,5 dBm. Das kann bei Boards mit schwacher Antenne helfen, zum Beispiel beim ESP32-C3 Super Mini, wenn die Verbindung abreißt. Setze `false` für volle Sendeleistung, wenn dein Router weit entfernt ist. Bei Verbindungsabbrüchen siehe [Troubleshooting](#-troubleshooting).
 
 ---
 
@@ -371,11 +375,11 @@ Das Dashboard zeigt jeden Server als Kachel. Du kannst ihn einschalten, herunter
 
 ## 🔌 API-Endpunkte
 
-Alle Dashboard-Endpunkte verlangen einen Login (HTTP Basic Auth mit `WEB_USER` und `WEB_PASSWORD`). Dazu gilt für beide Versionen:
+Mit `useLogin = true` verlangen alle Dashboard-Endpunkte einen Login (HTTP Basic Auth mit `WEB_USER` und `WEB_PASSWORD`), standardmäßig (`useLogin = false`) ist kein Login nötig. Dazu gilt für beide Versionen:
 
 - Schreibende Anfragen (POST) akzeptieren nur `Content-Type: application/json` (sonst 415) und nur den eigenen Origin oder gar keinen (sonst 403). Das schützt vor CSRF.
-- Der `Host`-Header muss zum ESP gehören (IP oder Hostname), sonst antwortet der ESP mit 403. Das schützt vor DNS-Rebinding.
-- Nach einem Fehlversuch beim Login sperrt der ESP die absendende IP für 1 Sekunde (Antwort 429).
+- Der `Host`-Header muss zum ESP gehören (IP, Hostname, `<hostname>.local` oder `<hostname>.<localDomain>`; `.local` löst nur die Multi-Version per mDNS auf), sonst antwortet der ESP mit 403. Das schützt vor DNS-Rebinding.
+- Mit `useLogin = true` sperrt der ESP die absendende IP für 1 Sekunde (Antwort 429).
 
 Beispiel mit `curl`:
 
@@ -406,7 +410,7 @@ Liefert das HTML Web-Interface.
 | `power` | boolean oder `null` | Mainboard-Spannung vorhanden, `null` bei `usePowerSense = false` |
 
 #### `POST /poweron`
-Startet den Server durch einen Druck auf den Power-Button (`onTime` ms). Nur POST, mit `Content-Type: application/json` und Login. Der Body wird nicht ausgewertet, `{}` genügt.
+Startet den Server durch einen Druck auf den Power-Button (`onTime` ms). Nur POST, mit `Content-Type: application/json` (und Login, wenn `useLogin = true`). Der Body wird nicht ausgewertet, `{}` genügt.
 
 ```json
 { "success": true }
@@ -447,7 +451,7 @@ Status aller bekannten Server:
       "espReachable": true,
       "pingTime": 4,
       "hasReset": true,
-      "version": "1.0.12"
+      "version": "1.0.13"
     },
     "112233445566": {
       "isLocal": false,
@@ -460,7 +464,7 @@ Status aller bekannten Server:
 Der lokale Server steht unter dem Schlüssel `local`, andere ESPs unter ihrer ID (MAC ohne Doppelpunkte). `serverPower` ist `null`, wenn der betreffende ESP mit `usePowerSense = false` läuft. `lastSeenAgo` (ms seit der letzten Antwort), `uptime` (ms) und `rssi` kommen nur bei entfernten ESPs. Nicht erreichbare ESPs bleiben mit `espReachable: false` in der Liste und fallen nach 24 Stunden heraus.
 
 #### `POST /control`
-Löst eine Aktion aus. Login, JSON und eigener Origin sind Pflicht.
+Löst eine Aktion aus. JSON und eigener Origin sind Pflicht, Login nur mit `useLogin = true`.
 
 ```json
 { "target": "local", "action": "power" }
@@ -517,7 +521,7 @@ Auch hier muss der `Host`-Header zum ESP passen.
 
 ### Diagnose (`/api/diag`)
 
-Beide Versionen liefern unter `GET /api/diag` (Login erforderlich, `Cache-Control: no-store`) Kennzahlen, mit denen sich Feldfehler eingrenzen lassen:
+Beide Versionen liefern unter `GET /api/diag` (Login nur mit `useLogin = true`, `Cache-Control: no-store`) Kennzahlen, mit denen sich Feldfehler eingrenzen lassen:
 
 ```json
 {
@@ -529,7 +533,7 @@ Beide Versionen liefern unter `GET /api/diag` (Login erforderlich, `Cache-Contro
   "wifi_disconnects": 0,
   "last_disconnect_reason": 0,
   "max_loop_ms": 12,
-  "version": "1.0.12"
+  "version": "1.0.13"
 }
 ```
 
@@ -562,18 +566,18 @@ Ein Durchlauf von `loop()`, der dauerhaft hängt, taucht bei `max_loop_ms` nicht
 
 ## 🔒 Sicherheit
 
-Das Web-Interface ist durch einen Login geschützt, dazu kommen CSRF- und Rebinding-Schutz (Issues #8 und #9). Konkret:
+ServerWatch ist für ein privates Heimnetz gedacht. Der Login ist deshalb standardmäßig aus (`useLogin = false`). Ohne Login kann jedes Gerät im LAN den Server schalten, zum Beispiel per `curl`. Webseiten im Browser werden weiterhin durch die Host-, Origin- und JSON-Prüfung abgewehrt (CSRF- und Rebinding-Schutz, Issues #8 und #9). Setze `useLogin = true`, wenn der ESP außerhalb des privaten Netzes erreichbar ist. Konkret:
 
-- **Login** per HTTP Basic Auth für alle Dashboard-Endpunkte, mit 1 Sekunde Sperre pro IP nach einem Fehlversuch
+- **Login** (nur mit `useLogin = true`) per HTTP Basic Auth für alle Dashboard-Endpunkte, mit 1 Sekunde Sperre pro IP nach einem Fehlversuch
 - **CSRF-Schutz:** schreibende Anfragen nur als JSON und nur vom eigenen Origin, `/poweron` nur per POST
-- **DNS-Rebinding-Schutz:** Anfragen mit fremdem `Host`-Header lehnt der ESP mit 403 ab
+- **DNS-Rebinding-Schutz:** Anfragen mit fremdem `Host`-Header lehnt der ESP mit 403 ab. Erlaubt sind IP, Hostname, `<hostname>.local` und `<hostname>.<localDomain>`
 - **WebSocket** (Multi): Token pflicht, Origin wird geprüft
 - **Schwarm** (Multi): HMAC-signierte Anfragen mit Einmal-Nonce, ohne `SWARM_KEY` abgeschaltet
 
 Wichtig sind zwei Grenzen:
 
-- ⚠️ **HTTP ist unverschlüsselt.** Benutzername und Passwort gehen bei Basic Auth im Klartext durchs LAN. Betreibe ServerWatch deshalb nur in einem vertrauenswürdigen Netz und gib den ESP **nicht** ins Internet frei. Brauchst du Zugriff von unterwegs, geht das über ein VPN (z. B. WireGuard).
-- ⚠️ **Ändere das Standard-Passwort** `serverwatch`. Die Multi-Version warnt im Dashboard, solange es aktiv ist. Beide Versionen schreiben beim Start eine Warnung ins serielle Log.
+- ⚠️ **HTTP ist unverschlüsselt.** Benutzername und Passwort gehen bei Basic Auth (mit `useLogin = true`) im Klartext durchs LAN. Betreibe ServerWatch deshalb nur in einem vertrauenswürdigen Netz und gib den ESP **nicht** ins Internet frei. Brauchst du Zugriff von unterwegs, geht das über ein VPN (z. B. WireGuard).
+- ⚠️ **Ändere mit `useLogin = true` das Standard-Passwort** `serverwatch`. Die Multi-Version warnt im Dashboard, solange es aktiv ist. Beide Versionen schreiben beim Start eine Warnung ins serielle Log.
 
 ---
 
@@ -638,7 +642,7 @@ setInterval(updateStatus, 5000);  // Auto-Refresh alle 5 Sekunden
 ### Web-Interface lädt nicht oder fragt immer wieder nach dem Passwort
 - ✅ Überprüfe, ob der ESP32 mit dem WiFi verbunden ist
 - ✅ Verwende die IP-Adresse oder den Hostnamen des ESP, andere Namen lehnt er ab (403)
-- ✅ Prüfe `WEB_USER` und `WEB_PASSWORD` in der `secrets.h`
+- ✅ Nur mit `useLogin = true`: Prüfe `WEB_USER` und `WEB_PASSWORD` in der `secrets.h`
 - ✅ Lösche den Browser-Cache
 
 ### ESP nach einiger Zeit nicht erreichbar
@@ -650,7 +654,7 @@ Wenn der ESP nach Stunden oder Tagen nicht mehr antwortet, hilft diese Reihenfol
 3. **Stecke ihn aus und wieder ein** und lies danach `reset_reason` aus `/api/diag`. Ein Wert von 9 (Brownout) deutet auf die Stromversorgung hin, 6 oder 5 auf einen Hänger (Watchdog), 1 auf einen normalen Start nach Stromverlust.
 4. **Prüfe, ob der überwachte Server aus war.** Hängt der ESP am USB des Servers, verliert er mit ihm den Strom.
 5. **Stromversorgung:** Betreibe den ESP nicht am USB-Port des überwachten Servers, sondern an einem eigenen, stabilen Netzteil. Spannungseinbrüche führen zu Brownouts.
-6. **Sendeleistung:** Bei Boards mit schwacher Antenne (z. B. ESP32-C3 Super Mini) kann `reduceTxPower = true` helfen. Der Grund einer Trennung steht im seriellen Log und als Code in `last_disconnect_reason`.
+6. **Sendeleistung:** Bei Boards mit schwacher Antenne (z. B. ESP32-C3 Super Mini) hilft die reduzierte Sendeleistung (`reduceTxPower = true`, Standard). Bei Abbrüchen nicht auf `false` stellen. Der Grund einer Trennung steht im seriellen Log und als Code in `last_disconnect_reason`.
 
 ---
 

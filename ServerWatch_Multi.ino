@@ -51,7 +51,9 @@ const int POWER_CHECK_PIN = 4;                    // Pin zum Prüfen der Spannun
 const int POWER_BUTTON_PIN = 3;                   // Pin zum Server Ein/Ausschalten
 const int RESET_BUTTON_PIN = 5;                   // Pin zum Server Reset (optional, -1 wenn nicht verwendet)
 const bool usePowerSense = true;                  // false, wenn POWER_CHECK_PIN nicht mit dem Mainboard verbunden ist
-const bool reduceTxPower = false;                 // true senkt die WLAN-Sendeleistung auf 8,5 dBm (hilft z. B. beim ESP32-C3 Super Mini mit schwacher Antenne, Issue #23)
+const bool reduceTxPower = true;                  // true senkt die WLAN-Sendeleistung auf 8,5 dBm (hilft z. B. beim ESP32-C3 Super Mini mit schwacher Antenne, Issue #23); false für volle Sendeleistung
+const bool useLogin = false;                      // true, wenn der ESP außerhalb des privaten Netzes erreichbar ist (aktiviert Login per HTTP Basic Auth)
+const char* localDomain = "fritz.box";            // zusätzliche lokale DNS-Domain des Routers, "" = keine
 
 // Timing Konfiguration
 const int powerButtonTime = 800;                  // Millisekunden für Power-Button Druck
@@ -70,7 +72,7 @@ const char* mdnsServiceName = "serverwatch";      // mDNS Service Name für Auto
 // ENDE DER KONFIGURATIONSVARIABLEN
 // ========================================
 
-const char* firmwareVersion = "1.0.12";
+const char* firmwareVersion = "1.0.13";
 
 // Webserver und WebSocket
 WebServer server(80);
@@ -668,7 +670,12 @@ bool isOwnHost(String host) {
     if (colon >= 0) host = host.substring(0, colon);
     if (host.length() == 0) return false;
     if (host == WiFi.localIP().toString()) return true;
-    return host == espHostname || host.startsWith(espHostname + ".");  // z. B. .local oder .fritz.box
+    String own = espHostname;
+    own.toLowerCase();
+    if (host == own || host == own + ".local") return true;
+    String domain = localDomain;
+    domain.toLowerCase();
+    return domain.length() > 0 && host == own + "." + domain;
 }
 
 // Origin leer (kein Browser, andere ESPs) oder eigene Adresse
@@ -714,6 +721,7 @@ bool loginThrottled(uint32_t ip) {
 // Host prüfen und Login verlangen (HTTP Basic Auth)
 bool requireAuth() {
     if (!checkHost()) return false;
+    if (!useLogin) return true;
     uint32_t ip = (uint32_t)server.client().remoteIP();
     if (loginThrottled(ip)) {
         sendError(429, "Zu viele Fehlversuche, bitte kurz warten");
@@ -951,7 +959,7 @@ void setup() {
     // Sicherheit
     wsToken = randomHex(16);
     swarmEnabled = strlen(swarmKey) >= 16;
-    defaultCredentials = strcmp(webPassword, "serverwatch") == 0;
+    defaultCredentials = useLogin && strcmp(webPassword, "serverwatch") == 0;
     if (defaultCredentials) Serial.println("WARNUNG: Standard-Passwort aktiv - WEB_PASSWORD in secrets.h setzen");
     
     // Netzwerk Setup

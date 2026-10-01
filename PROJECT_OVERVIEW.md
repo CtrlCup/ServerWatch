@@ -77,7 +77,7 @@ Arduino IDE note: a sketch must live in a folder of the same name, and two `.ino
 
 ### Endpoints
 
-All dashboard endpoints require HTTP Basic Auth. Write requests also require `Content-Type: application/json` and an own or empty `Origin` (CSRF). Requests with a foreign `Host` header get 403 (DNS rebinding). A failed login blocks the client IP for 1 s (429).
+With `useLogin = true` all dashboard endpoints require HTTP Basic Auth. Write requests also require `Content-Type: application/json` and an own or empty `Origin` (CSRF). Requests with a foreign `Host` header get 403 (DNS rebinding). A failed login blocks the client IP for 1 s (429).
 
 | Version | Endpoint | Purpose |
 |---------|----------|---------|
@@ -107,11 +107,11 @@ Returns `uptime_ms`, `reset_reason` (number from `esp_reset_reason()`, e.g. 1 po
 
 - **Task watchdog**: 15 s (`watchdogTimeoutS`). Restarts the ESP if `loop()` (and in the multi-node variant the `monitorTask`) hangs.
 - **WiFi**: Auto-reconnect plus a check every 10 s, a restart after 5 minutes without WiFi (`wifiRestartTimeout`), and `setup()` does not wait longer than 20 s for the first connection. WiFi events are counted and logged on the serial console.
-- **Option `reduceTxPower`**: Lowers the WiFi transmit power to 8.5 dBm, useful for boards with weak antennas.
+- **Option `reduceTxPower`**: Lowers the WiFi transmit power to 8.5 dBm (default on), useful for boards with weak antennas.
 
 ## Security
 
-- Login (HTTP Basic Auth) with credentials from `secrets.h`. The default password `serverwatch` triggers a serial warning in both variants and a hint in the multi-node dashboard.
+- Optional login (HTTP Basic Auth, only with `useLogin = true`, default off) with credentials from `secrets.h`. The default password `serverwatch` triggers a serial warning in both variants and a hint in the multi-node dashboard.
 - CSRF protection, host header check against DNS rebinding, login throttling per IP.
 - WebSocket requires a token and checks the origin.
 - Swarm traffic is signed (HMAC-SHA256) with challenge-response for status and one-time nonces for commands.

@@ -262,6 +262,7 @@ class Swarm:
         e.setdefault("SWCFG_webUser", WEB_USER)
         e.setdefault("SWCFG_webPassword", WEB_PASSWORD)
         e.setdefault("SWCFG_swarmKey", SWARM_KEY)
+        e.setdefault("SWCFG_useLogin", "true")  # bestehende Tests gehen von Login aus (Sketch-Standard: aus)
         for k, v in (cfg or {}).items():
             if v is None:
                 e.pop("SWCFG_" + k, None)  # Standardwert aus dem Sketch verwenden

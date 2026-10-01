@@ -36,12 +36,14 @@ const int checkPort = 80;                 // Auf welchen Port soll geprüft werd
 const int POWER_CHECK_PIN = 4;  // Pin zum Prüfen der Spannung (Mainboard)
 const int POWER_BUTTON_PIN = 3; // Pin zum Durchschalten (Startknopf)
 const bool usePowerSense = true; // false, wenn POWER_CHECK_PIN nicht mit dem Mainboard verbunden ist
-const bool reduceTxPower = false; // true senkt die WLAN-Sendeleistung auf 8,5 dBm (hilft z. B. beim ESP32-C3 Super Mini mit schwacher Antenne, Issue #23)
+const bool reduceTxPower = true; // true senkt die WLAN-Sendeleistung auf 8,5 dBm (hilft z. B. beim ESP32-C3 Super Mini mit schwacher Antenne, Issue #23); false für volle Sendeleistung
+const bool useLogin = false; // true, wenn der ESP außerhalb des privaten Netzes erreichbar ist (aktiviert Login per HTTP Basic Auth)
+const char* localDomain = "fritz.box"; // zusätzliche lokale DNS-Domain des Routers, "" = keine
 
 // Zeiteinstellungen
 int onTime = 800; // Zeit wie lange der Ausgang bestromt werden soll in Millisekunden
 
-const char* firmwareVersion = "1.0.12";
+const char* firmwareVersion = "1.0.13";
 
 WebServer server(80);
 
@@ -300,7 +302,10 @@ bool isOwnHost(String host) {
   if (host == WiFi.localIP().toString()) return true;
   String own = espHostname;
   own.toLowerCase();
-  return host == own || host.startsWith(own + ".");
+  if (host == own || host == own + ".local") return true;
+  String domain = localDomain;
+  domain.toLowerCase();
+  return domain.length() > 0 && host == own + "." + domain;
 }
 
 // Origin leer (kein Browser) oder eigene Adresse
@@ -323,6 +328,7 @@ bool requireAuth() {
     sendError(403, "Unbekannter Host");
     return false;
   }
+  if (!useLogin) return true;
   uint32_t ip = (uint32_t)server.client().remoteIP();
   for (int i = 0; i < 8; i++) {
     if (failedLoginIp[i] == ip && failedLoginAt[i] != 0 && millis() - failedLoginAt[i] < 1000) {
@@ -490,7 +496,7 @@ void setup() {
   const char* headerKeys[] = {"Content-Type", "Origin"};
   server.collectHeaders(headerKeys, 2);
   server.begin();
-  if (strcmp(webPassword, "serverwatch") == 0) Serial.println("WARNUNG: Standard-Passwort aktiv - WEB_PASSWORD in secrets.h setzen");
+  if (useLogin && strcmp(webPassword, "serverwatch") == 0) Serial.println("WARNUNG: Standard-Passwort aktiv - WEB_PASSWORD in secrets.h setzen");
   Serial.println("Webserver gestartet!");
 
   // Watchdog: startet den ESP neu, wenn loop() hängt (Issue #4)

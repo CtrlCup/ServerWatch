@@ -246,9 +246,10 @@ def test_diag_reports_plausible_values_and_wifi_drop(swarm, sketch):
 
 @pytest.mark.parametrize("sketch", SKETCHES)
 def test_reduce_tx_power_option(swarm, sketch):
-    """Issue #23: reduceTxPower senkt die Sendeleistung nach WiFi.begin() und meldet das seriell."""
-    default = swarm.add("Alpha", sketch=sketch)
-    reduced = swarm.add("Beta", sketch=sketch, cfg={"reduceTxPower": "true"})
-    swarm.wait_ready(default, reduced)
-    assert "Sendeleistung" in reduced.serial()
-    assert "Sendeleistung" not in default.serial()
+    """Issue #23: reduceTxPower senkt die Sendeleistung nach WiFi.begin() und meldet das seriell.
+    Seit 1.0.13 ist die Option standardmaessig an (ESP32-C3 Super Mini)."""
+    default = swarm.add("Alpha", sketch=sketch, cfg={"reduceTxPower": None})
+    full = swarm.add("Beta", sketch=sketch, cfg={"reduceTxPower": "false"})
+    swarm.wait_ready(default, full)
+    assert "Sendeleistung" in default.serial()
+    assert "Sendeleistung" not in full.serial()
