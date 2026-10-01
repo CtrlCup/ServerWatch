@@ -35,4 +35,5 @@ secrets.h
 test/.build/
 test/sim/.deps/
 test/js/node_modules/
+test/.venv/
 __pycache__/

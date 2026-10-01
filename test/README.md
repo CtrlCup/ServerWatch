@@ -15,6 +15,8 @@ Die Suite prüft beide Sketches, ohne dass echte ESP32 nötig sind:
 
 ```bash
 pip install -r test/requirements.txt      # pytest, requests, websockets
+# Ubuntu/Debian (systemweites pip gesperrt): venv unter test/.venv, wird automatisch genutzt
+#   python3 -m venv test/.venv && test/.venv/bin/pip install -r test/requirements.txt platformio
 (cd test/js && npm ci)                    # jsdom für die Dashboard-Tests (optional, sonst skip)
 test/run_tests.sh                         # alles (Firmware-Build nur, wenn `pio` installiert ist)
 test/run_tests.sh -m "not firmware"       # ohne Firmware-Build

@@ -4,7 +4,8 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BOARD="${1:-esp32-c3-devkitm-1}"
-PIO="${PIO:-$(command -v pio || echo "$HOME/.platformio/penv/bin/pio")}"
+VENV_PIO="$ROOT/test/.venv/bin/pio"
+PIO="${PIO:-$( { [ -x "$VENV_PIO" ] && echo "$VENV_PIO"; } || command -v pio || echo "$HOME/.platformio/penv/bin/pio")}"
 OUT="$ROOT/test/.build/firmware"
 
 build() {

@@ -7,7 +7,8 @@ import pytest
 
 from simnet import ROOT
 
-PIO = shutil.which("pio") or os.path.expanduser("~/.platformio/penv/bin/pio")
+VENV_PIO = os.path.join(ROOT, "test", ".venv", "bin", "pio")
+PIO = (VENV_PIO if os.path.exists(VENV_PIO) else None) or shutil.which("pio") or os.path.expanduser("~/.platformio/penv/bin/pio")
 
 
 @pytest.mark.firmware
