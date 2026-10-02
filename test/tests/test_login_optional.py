@@ -8,7 +8,7 @@ import socket
 
 import pytest
 
-from simnet import POWER_BUTTON_PIN, SWARM_KEY, ws_messages
+from simnet import POWER_BUTTON_PIN, SWARM_KEY, expected_hostname, ws_messages
 
 LOGIN = [pytest.param("false", id="login-off"), pytest.param("true", id="login-on")]
 SKETCHES = [pytest.param("ServerWatch_Multi", id="multi"), pytest.param("Serverwatch", id="single")]
@@ -35,7 +35,7 @@ def make(swarm, sketch, login, cfg=None, power=False, **kw):
 def hostname(node):
     if node.sketch == "ServerWatch_Multi":
         return node.status()["local"]["hostname"]
-    return "ServerWatch-" + node.name
+    return expected_hostname(node.name, node.ip)
 
 
 def port(swarm):
@@ -260,9 +260,10 @@ def test_host_allowlist_custom_local_domain(swarm, sketch):
 def test_single_hostname_is_case_insensitive(swarm):
     n = make(swarm, "Serverwatch", "false")
     path = "/status"
-    for host in ("ServerWatch-Solo", "serverwatch-solo", "SERVERWATCH-SOLO.local", "serverwatch-solo.fritz.box"):
+    h = hostname(n)  # serverwatch-solo-<mac6>
+    for host in (h.title(), h, h.upper() + ".local", h + ".fritz.box"):
         assert n.get(path, headers={"Host": host}).status_code == 200, host
-    assert n.get(path, headers={"Host": "ServerWatch-Solox"}).status_code == 403
+    assert n.get(path, headers={"Host": h + "x"}).status_code == 403
 
 
 # ============================================================== Origin-/JSON-Schutz (beide Modi)

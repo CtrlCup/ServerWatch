@@ -43,7 +43,7 @@ const char* localDomain = "fritz.box"; // zusätzliche lokale DNS-Domain des Rou
 // Zeiteinstellungen
 int onTime = 800; // Zeit wie lange der Ausgang bestromt werden soll in Millisekunden
 
-const char* firmwareVersion = "1.0.13";
+const char* firmwareVersion = "1.1.0";
 
 WebServer server(80);
 
@@ -441,6 +441,25 @@ void startWiFi() {
   if (reduceTxPower) WiFi.setTxPower(WIFI_POWER_8_5dBm);
 }
 
+// Hostname nach RFC 1123: nur a-z, 0-9 und '-', Umlaute umschreiben, MAC-Suffix für Eindeutigkeit
+String makeHostname(const String& name, const String& id) {
+  String base = name;
+  base.toLowerCase();
+  base.replace("ä", "ae"); base.replace("ö", "oe"); base.replace("ü", "ue");
+  base.replace("Ä", "ae"); base.replace("Ö", "oe"); base.replace("Ü", "ue"); base.replace("ß", "ss");
+  String clean;
+  for (unsigned int i = 0; i < base.length() && clean.length() < 20; i++) {
+    char c = base[i];
+    bool ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
+    if (ok) clean += c;
+    else if (clean.length() > 0 && clean[clean.length() - 1] != '-') clean += '-';
+  }
+  while (clean.endsWith("-")) clean.remove(clean.length() - 1);
+  String host = "serverwatch-";
+  if (clean.length() > 0) host += clean + "-";
+  return host + id.substring(id.length() - 6);
+}
+
 void setup() {
   Serial.begin(115200);
   
@@ -460,7 +479,10 @@ void setup() {
   Serial.println(lastPowerStatus ? "HIGH (Spannung erkannt)" : "LOW (Keine Spannung)");
   
   Serial.print("Verbinde mit WiFi");
-  espHostname = "ServerWatch-" + String(nodeName);
+  String nodeId = WiFi.macAddress();
+  nodeId.replace(":", "");
+  nodeId.toLowerCase();
+  espHostname = makeHostname(nodeName, nodeId);
   WiFi.setHostname(espHostname.c_str());
   
   // Stellt sicher, dass das WiFi-Modul nicht in den Schlafmodus geht (wichtig für Fritzboxen)
@@ -485,6 +507,8 @@ void setup() {
   } else {
     Serial.println("\nWiFi noch nicht verbunden - neuer Versuch im Hintergrund");
   }
+  Serial.print("Hostname: ");
+  Serial.println(espHostname);
   Serial.print("Node Name: ");
   Serial.println(nodeName);
   

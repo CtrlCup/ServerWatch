@@ -292,7 +292,7 @@ const char* localDomain = "fritz.box";    // lokale DNS-Domain des Routers, "" =
 int onTime = 800;                         // Dauer des Button-Drucks in ms
 ```
 
-Der Hostname des ESP lautet `ServerWatch-<nodeName>`.
+Der Hostname des ESP lautet `serverwatch-<name>-<mac6>` (aus `nodeName` gebildet: Kleinbuchstaben, Umlaute umgeschrieben, Leerzeichen und Sonderzeichen werden zu `-`, höchstens 20 Zeichen, dazu die letzten 6 Zeichen der MAC-Adresse). Bis Version 1.0.13 hieß er `ServerWatch-<nodeName>`. Alte Lesezeichen mit diesem Namen funktionieren nicht mehr, der ESP antwortet darauf mit 403.
 
 ### Multi-ESP Version (`ServerWatch_Multi.ino`)
 
@@ -340,7 +340,7 @@ Der Hostname setzt sich zusammen als `serverwatch-<name>-<letzte 6 Stellen der M
 2. **Auf die WLAN-Verbindung warten.** Der ESP versucht es beim Start bis zu 20 Sekunden, danach im Hintergrund weiter.
 3. **IP-Adresse herausfinden:**
    - im Serial Monitor (115200 Baud)
-   - oder in deinem Router nach dem Hostnamen suchen (`ServerWatch-<nodeName>` bzw. `serverwatch-<name>-<mac6>`)
+   - oder in deinem Router nach dem Hostnamen suchen (`serverwatch-<name>-<mac6>`)
 
 4. **Browser öffnen:**
    ```
@@ -451,7 +451,7 @@ Status aller bekannten Server:
       "espReachable": true,
       "pingTime": 4,
       "hasReset": true,
-      "version": "1.0.13"
+      "version": "1.1.0"
     },
     "112233445566": {
       "isLocal": false,
@@ -533,7 +533,7 @@ Beide Versionen liefern unter `GET /api/diag` (Login nur mit `useLogin = true`, 
   "wifi_disconnects": 0,
   "last_disconnect_reason": 0,
   "max_loop_ms": 12,
-  "version": "1.0.13"
+  "version": "1.1.0"
 }
 ```
 

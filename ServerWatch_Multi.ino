@@ -72,7 +72,7 @@ const char* mdnsServiceName = "serverwatch";      // mDNS Service Name für Auto
 // ENDE DER KONFIGURATIONSVARIABLEN
 // ========================================
 
-const char* firmwareVersion = "1.0.13";
+const char* firmwareVersion = "1.1.0";
 
 // Webserver und WebSocket
 WebServer server(80);

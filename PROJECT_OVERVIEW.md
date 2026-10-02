@@ -63,7 +63,7 @@ Arduino IDE note: a sketch must live in a folder of the same name, and two `.ino
 ## Main Entry Points & Core Logic
 
 ### 1. `Serverwatch.ino`
-- **`setup()`**: Initializes the GPIOs (`POWER_CHECK_PIN` as `INPUT_PULLDOWN`, `POWER_BUTTON_PIN` as output), sets the hostname `ServerWatch-<nodeName>`, registers the WiFi event handler, connects to WiFi (waits at most 20 s), registers the routes and starts the web server and the task watchdog.
+- **`setup()`**: Initializes the GPIOs (`POWER_CHECK_PIN` as `INPUT_PULLDOWN`, `POWER_BUTTON_PIN` as output), sets the hostname `serverwatch-<name>-<mac6>` (built from `nodeName` via `makeHostname()`), registers the WiFi event handler, connects to WiFi (waits at most 20 s), registers the routes and starts the web server and the task watchdog.
 - **`loop()`**: Serves HTTP clients, checks the WiFi connection every 10 s (reconnect, restart after 5 minutes without WiFi) and every 3 s refreshes the stored reachability and power values with a TCP connect (1 s timeout). It also tracks the longest loop run for `/api/diag`.
 - **Routes**: `GET /`, `GET /status`, `POST /poweron`, `GET /api/diag`.
 - **`handlePowerOn()`**: Refuses with 409 if the server is already running, otherwise drives the pin HIGH for `onTime` ms (blocking).

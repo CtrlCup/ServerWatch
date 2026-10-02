@@ -1,10 +1,11 @@
 """Einzel-Version (Serverwatch.ino): Grundfunktion und Robustheit."""
+import re
 import time
 
 import requests
 
 from conftest import known_bug
-from simnet import POWER_BUTTON_PIN
+from simnet import POWER_BUTTON_PIN, expected_hostname
 
 
 def solo(swarm, **kw):
@@ -62,3 +63,67 @@ def test_single_wifi_reconnects_after_router_outage(swarm):
     swarm.sleep(20000)
     n.set_ap(True)
     assert swarm.wait_for(lambda: n.link_up() and n.get("/", 2000).ok, 30000)
+
+
+# ------------------------------------------------------------ Hostname (RFC 1123) und Host-Allowlist
+PROXMOX = "Proxmox Node 2"
+GROESSTER = "Größter Server!"
+
+
+def named(swarm, name, **kw):
+    swarm.set_server("refused")
+    n = swarm.add(name, sketch="Serverwatch", power=False, cfg={"useLogin": "false"}, **kw)
+    swarm.wait_ready(n)
+    return n
+
+
+def serial_hostname(n):
+    m = re.search(r"Hostname: (\S+)\s*$", n.serial(), re.M)  # Zeilen tragen ein Zeitstempel-Praefix
+    return m.group(1) if m else None
+
+
+def test_single_hostname_is_sanitized_with_mac_suffix(swarm):
+    n = named(swarm, PROXMOX)
+    h = expected_hostname(PROXMOX, n.ip)
+    assert h == "serverwatch-proxmox-node-2-000a01"
+    assert serial_hostname(n) == h
+    assert re.fullmatch(r"[a-z0-9-]+", h) and len(h) <= 63
+
+
+def test_single_hostname_transliterates_umlauts_and_symbols(swarm):
+    n = named(swarm, GROESSTER)
+    assert serial_hostname(n) == expected_hostname(GROESSTER, n.ip) == "serverwatch-groesster-server-000a01"
+
+
+def test_single_hostname_is_rfc1123_for_hostile_names(swarm):
+    for name in ("A" * 60, "  --x__y--  ", "äöüß"):
+        n = named(swarm, name)
+        h = serial_hostname(n)
+        assert h == expected_hostname(name, n.ip), (name, h)
+        assert re.fullmatch(r"[a-z0-9]([a-z0-9-]*[a-z0-9])?", h) and len(h) <= 63 and "--" not in h, h
+
+
+def test_single_hostname_empty_sanitized_name_uses_mac_only(swarm):
+    n = named(swarm, "!!!")
+    assert serial_hostname(n) == "serverwatch-" + "".join(f"{int(b):02x}" for b in n.ip.split(".")[1:])
+
+
+def test_single_allowlist_accepts_sanitized_hostname(swarm):
+    n = named(swarm, PROXMOX)
+    h = expected_hostname(PROXMOX, n.ip)
+    for host in (h, h.upper(), f"{h}.local", f"{h}.LOCAL", f"{h}.fritz.box", f"{h}.FRITZ.BOX", n.ip):
+        assert n.get("/status", headers={"Host": host}).status_code == 200, host
+
+
+def test_single_allowlist_rejects_old_hostname(swarm):
+    n = named(swarm, PROXMOX)
+    for host in ("ServerWatch-Proxmox Node 2", "ServerWatch-Proxmox-Node-2", "serverwatch-proxmox-node-2",
+                 "serverwatch-proxmox-node-2.local", "ServerWatch-Proxmox%20Node%202.local"):
+        assert n.get("/status", headers={"Host": host}).status_code == 403, host
+
+
+def test_single_page_shows_display_name_with_spaces(swarm):
+    n = named(swarm, PROXMOX)
+    assert PROXMOX in n.get("/").text
+    n2 = named(swarm, GROESSTER)
+    assert "Größter Server" in n2.get("/").content.decode("utf-8")
