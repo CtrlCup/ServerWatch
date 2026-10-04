@@ -8,8 +8,8 @@ Der Sketch-Code bleibt unveraendert, es werden nur zwei mechanische Schritte ang
      Umgebungsvariable SWCFG_NAME eigene Werte (serverName, ...) bekommt.
   2. Funktionsprototypen werden vor der ersten Funktionsdefinition eingefuegt (Arduino-Verhalten).
 
-Nutzung: python3 test/sim/build.py [Sketch.ino ...]   (Standard: beide Sketches)
-Ausgabe: test/.build/sim/<Sketch>  (ausfuehrbar; anderes Ziel per SIM_OUT)
+Nutzung: python3 test/sim/build.py [Pfad/Sketch.ino ...]   (Standard: alle vorhandenen Sketches)
+Ausgabe: test/.build/sim/<Basename>  (ausfuehrbar; anderes Ziel per SIM_OUT)
 """
 import os
 import re
@@ -23,7 +23,10 @@ OUT = os.environ.get("SIM_OUT") or os.path.join(ROOT, "test", ".build", "sim")
 DEPS = os.path.join(HERE, ".deps")
 FAKES = os.path.join(HERE, "fakes")
 ARDUINOJSON_URL = "https://github.com/bblanchon/ArduinoJson/releases/download/v6.21.5/ArduinoJson-v6.21.5.h"
-SKETCHES = ["ServerWatch_Multi.ino", "Serverwatch.ino"]
+# Pfade relativ zu ROOT, Sketches duerfen in Unterordnern liegen. In der Standardliste werden
+# fehlende Dateien uebersprungen; explizit angegebene muessen existieren.
+SKETCHES = ["ServerWatch_Multi.ino", "Serverwatch.ino",
+            "ServerTemp/ServerTemp/ServerTemp.ino", "ServerTemp/ServerTemp_Multi/ServerTemp_Multi.ino"]
 
 CXX = os.environ.get("CXX", "g++")
 CXXFLAGS = [
@@ -31,7 +34,7 @@ CXXFLAGS = [
     "-DARDUINO=10819", "-DESP32", "-DARDUINO_ARCH_ESP32", "-DSERVERWATCH_SIM=1",
     "-DARDUINOJSON_ENABLE_PROGMEM=0", "-DARDUINOJSON_ENABLE_ARDUINO_STREAM=0",
     "-DARDUINOJSON_ENABLE_ARDUINO_PRINT=0", "-DARDUINOJSON_ENABLE_ARDUINO_STRING=1",
-    "-I", FAKES, "-I", DEPS, "-I", ROOT,  # ROOT: Header neben den Sketches (dashboard_html.h, secrets.h)
+    "-I", FAKES, "-I", DEPS,  # der Sketch-Ordner (dashboard_html.h, secrets.h) kommt pro Sketch dazu
 ]
 
 RAW_STRING = re.compile(r'R"([^(\s]*)\((.*?)\)\1"', re.S)
@@ -78,7 +81,7 @@ def run(cmd):
 
 
 def main(argv):
-    sketches = argv or SKETCHES
+    sketches = argv or [s for s in SKETCHES if os.path.exists(os.path.join(ROOT, s))]
     ensure_deps()
     os.makedirs(OUT, exist_ok=True)
     runtime_obj = os.path.join(OUT, "sim_runtime.o")
