@@ -87,7 +87,7 @@ def main(argv):
     runtime_obj = os.path.join(OUT, "sim_runtime.o")
     runtime_src = os.path.join(FAKES, "sim_runtime.cpp")
     headers = [os.path.join(FAKES, f) for f in os.listdir(FAKES)]
-    if not os.path.exists(runtime_obj) or os.path.getmtime(runtime_obj) < max(os.path.getmtime(h) for h in headers):
+    if not os.path.exists(runtime_obj) or os.path.getmtime(runtime_obj) < max(os.path.getmtime(h) for h in headers + [runtime_src]):
         run([CXX, *CXXFLAGS, "-c", "-o", runtime_obj, runtime_src])
     for sketch in sketches:
         name = os.path.splitext(os.path.basename(sketch))[0]

@@ -1,0 +1,7 @@
+// Die Simulation bildet arduino-esp32 2.0.17 nach.
+#pragma once
+#define ESP_ARDUINO_VERSION_MAJOR 2
+#define ESP_ARDUINO_VERSION_MINOR 0
+#define ESP_ARDUINO_VERSION_PATCH 17
+#define ESP_ARDUINO_VERSION_VAL(major, minor, patch) (((major) << 16) | ((minor) << 8) | (patch))
+#define ESP_ARDUINO_VERSION ESP_ARDUINO_VERSION_VAL(ESP_ARDUINO_VERSION_MAJOR, ESP_ARDUINO_VERSION_MINOR, ESP_ARDUINO_VERSION_PATCH)

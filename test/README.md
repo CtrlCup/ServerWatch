@@ -46,6 +46,7 @@ Jeder simulierte ESP ist ein eigener Prozess mit eigener IP (`127.0.10.1`, `.2`,
 - `HTTPClient` hat 5 s Connect-Timeout, `setTimeout()` setzt den Lese-Timeout.
 - WLAN-Modell mit Trennungsgründen, Auto-Reconnect-Regeln (`_isReconnectableReason`) und `first_connect`-Logik aus `WiFiGeneric.cpp`.
 - Task-Watchdog (`esp_task_wdt_*`, `enableLoopWDT()`) und `ESP.restart()` starten den Prozess neu (Reset-Grund bleibt erhalten).
+- Für ServerTemp: DS18B20 (`OneWire`/`DallasTemperature`, Wert aus `nodes/<ip>/temp`), LEDC-PWM (Event `ledc <pin> <duty>`, Datei `pwm_<pin>`), Tacho-Interrupts (Pulse nach `fan_rpm` oder einem Modell aus dem PWM-Wert, `SIM_FAN_MAX_RPM`) und `Preferences` (NVS als Dateien unter `nodes/<ip>/nvs/`, Event `nvs_write` pro Schreibvorgang). Ein Selbsttest (`test/tests/test_sim_fakes.py`, Sketch unter `test/sim/selftest/`) prüft diese Fakes.
 
 Zeit läuft beschleunigt (`SIM_TIME_SCALE`, Standard 5): `millis()`, `delay()` und alle modellierten Wartezeiten skalieren gemeinsam.
 

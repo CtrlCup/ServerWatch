@@ -265,6 +265,32 @@ BaseType_t xSemaphoreGive(SemaphoreHandle_t s);
 BaseType_t xSemaphoreTakeRecursive(SemaphoreHandle_t s, TickType_t ticks);
 BaseType_t xSemaphoreGiveRecursive(SemaphoreHandle_t s);
 
+// ---------------------------------------------------------------- LEDC (arduino-esp32 2.x-API)
+uint32_t ledcSetup(uint8_t ch, uint32_t freq, uint8_t bits);
+void ledcAttachPin(uint8_t pin, uint8_t ch);
+void ledcWrite(uint8_t ch, uint32_t duty);
+
+// ---------------------------------------------------------------- Interrupts / kritische Abschnitte
+// Kritische Abschnitte und ISR-Aufrufe (Pulsthread der Simulation) teilen sich einen rekursiven Mutex.
+#define RISING 0x01
+#define FALLING 0x02
+#define CHANGE 0x03
+#define IRAM_ATTR
+#define DRAM_ATTR
+#define digitalPinToInterrupt(p) (p)
+void attachInterrupt(uint8_t pin, void (*isr)(), int mode);
+void detachInterrupt(uint8_t pin);
+typedef struct { volatile uint32_t owner; volatile uint32_t count; } portMUX_TYPE;
+#define portMUX_INITIALIZER_UNLOCKED {0, 0}
+void sim_irq_lock();
+void sim_irq_unlock();
+#define portENTER_CRITICAL(m) ((void)(m), sim_irq_lock())
+#define portEXIT_CRITICAL(m) ((void)(m), sim_irq_unlock())
+#define portENTER_CRITICAL_ISR(m) ((void)(m), sim_irq_lock())
+#define portEXIT_CRITICAL_ISR(m) ((void)(m), sim_irq_unlock())
+void noInterrupts();
+void interrupts();
+
 // ---------------------------------------------------------------- Sim-intern
 // Vom Build-Skript eingesetzt: top-level `const char* X = "..."` -> sim_cfg("X", "...")
 // Ueberschreibbar per Umgebungsvariable SWCFG_X.
@@ -296,4 +322,5 @@ int tcp_connect(const std::string& host_or_ip, int port, double timeout_sim_ms);
 std::string resolve(const std::string& host);          // IP oder "" (mDNS .local ueber Registry)
 void log(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
 void event(const std::string& line);                   // Maschinenlesbares Ereignis in events.log
+void make_dirs(const std::string& path);               // legt Verzeichnisse rekursiv an (mkdir -p)
 }  // namespace sim

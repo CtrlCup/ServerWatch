@@ -18,6 +18,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 BIN_DIR = os.environ.get("SIM_BIN_DIR") or os.path.join(ROOT, "test", ".build", "sim")
 
 # GPIO-Belegung aus den Sketches (Standardkonfiguration)
+# Typ-Tags der Sim-NVS-Dateien (1. Byte), siehe test/sim/fakes/Preferences.h
+NVS_TYPES = {"u8": 1, "i32": 2, "u32": 3, "str": 0x21, "blob": 0x42}
+NVS_UNKNOWN_TAG = 0xFF
 POWER_CHECK_PIN = 4
 POWER_BUTTON_PIN = 3
 RESET_BUTTON_PIN = 5
@@ -98,6 +101,74 @@ class Node:
 
     def set_power(self, on):
         self.set_input(POWER_CHECK_PIN, on)
+
+    def set_temp(self, v):
+        """DS18B20-Messwert: Zahl, "disconnected", "85" oder None (Datei loeschen = kein Sensor)."""
+        if v is None:
+            try:
+                os.remove(os.path.join(self.dir, "temp"))
+            except FileNotFoundError:
+                pass
+        else:
+            self._write("temp", str(v))
+
+    def set_fan_rpm(self, v):
+        """Tacho-Drehzahl; None = Modell aus LEDC-Duty (siehe fakes/sim_runtime.cpp)."""
+        if v is None:
+            try:
+                os.remove(os.path.join(self.dir, "fan_rpm"))
+            except FileNotFoundError:
+                pass
+        else:
+            self._write("fan_rpm", str(v))
+
+    def pwm(self, pin):
+        """Zuletzt per ledcWrite gesetzter Duty auf dem Pin (int) oder None."""
+        v = self.read(f"pwm_{pin}", "").strip()
+        return int(v) if v else None
+
+    def nvs_writes(self, key=None):
+        """Anzahl der nvs_write-Ereignisse, optional nur fuer einen Schluessel ("key" oder "ns/key")."""
+        n = 0
+        for _, e in self.events():
+            if not e.startswith("nvs_write "):
+                continue
+            target = e[len("nvs_write "):]
+            if key is None or target == key or target.endswith("/" + key):
+                n += 1
+        return n
+
+    def _nvs_path(self, ns, key):
+        return os.path.join(self.dir, "nvs", ns, key)
+
+    def nvs_raw(self, ns, key):
+        """Nutzdaten eines NVS-Schluessels (bytes, ohne Typ-Tag) oder None."""
+        try:
+            with open(self._nvs_path(ns, key), "rb") as f:
+                return f.read()[1:]
+        except FileNotFoundError:
+            return None
+
+    def nvs_type(self, ns, key):
+        """Typ-Tag eines NVS-Schluessels (int) oder None."""
+        try:
+            with open(self._nvs_path(ns, key), "rb") as f:
+                tag = f.read(1)
+        except FileNotFoundError:
+            return None
+        return tag[0] if tag else None
+
+    def nvs_corrupt(self, ns, key, data, typ=None):
+        """Ueberschreibt einen NVS-Schluessel mit beliebigen Nutzdaten (str oder bytes).
+
+        typ: Name aus NVS_TYPES ("u8", "i32", "u32", "str", "blob") oder int-Tag. Ohne typ bekommt der Eintrag
+        ein unbekanntes Tag, das zu keinem Getter passt (alle liefern ihren Standardwert).
+        """
+        tag = NVS_UNKNOWN_TAG if typ is None else NVS_TYPES.get(typ, typ)
+        path = self._nvs_path(ns, key)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(bytes([tag]) + (data.encode() if isinstance(data, str) else data))
 
     # ------------------------------------------------------------ Beobachtung
     def read(self, name, default=""):

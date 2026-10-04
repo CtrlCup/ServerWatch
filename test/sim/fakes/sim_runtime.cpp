@@ -20,6 +20,7 @@
 #include "HTTPClient.h"
 #include "WebSocketsServer.h"
 #include "esp_task_wdt.h"
+#include "Preferences.h"
 
 #include <algorithm>
 #include <random>
@@ -94,6 +95,7 @@ static void mkdirs(const std::string& path) {
         mkdir(cur.c_str(), 0755);
     }
 }
+void make_dirs(const std::string& path) { mkdirs(path); }
 std::string read_file(const std::string& path, const std::string& def) {
     std::ifstream f(path);
     if (!f) return def;
@@ -143,6 +145,10 @@ void init(int argc, char** argv) {
     mkdirs(g_node_dir);
     mkdirs(g_state + "/mdns");
     mkdirs(g_state + "/hosts");
+    if (DIR* d = opendir(g_node_dir.c_str())) {  // LEDC-Zustand ueberlebt keinen Neustart
+        while (dirent* e = readdir(d)) if (strncmp(e->d_name, "pwm_", 4) == 0) unlink((g_node_dir + "/" + e->d_name).c_str());
+        closedir(d);
+    }
     write_file(g_node_dir + "/pid", std::to_string(getpid()));
     write_file(g_node_dir + "/link", "0");
     signal(SIGPIPE, SIG_IGN);
@@ -225,6 +231,204 @@ int digitalRead(uint8_t pin) {
     return v == "1" ? HIGH : LOW;
 }
 int analogRead(uint8_t pin) { return digitalRead(pin) ? 4095 : 0; }
+
+// ---------------------------------------------------------------- LEDC, Interrupts, Tacho
+// Kritische Abschnitte und ISR-Aufrufe teilen sich diesen Mutex (rekursiv: noInterrupts() in portENTER_CRITICAL).
+static std::recursive_mutex g_irq_mutex;
+static thread_local int t_irq_depth = 0;
+void sim_irq_lock() { g_irq_mutex.lock(); t_irq_depth++; }
+void sim_irq_unlock() { if (t_irq_depth > 0) { t_irq_depth--; g_irq_mutex.unlock(); } }
+void noInterrupts() { sim_irq_lock(); }
+void interrupts() { sim_irq_unlock(); }
+
+namespace {
+struct LedcChannel { uint32_t freq = 0; uint8_t bits = 0; int pin = -1; };
+LedcChannel g_ledc[16];
+std::mutex g_ledc_mutex;
+double g_duty_frac = 0;     // zuletzt geschriebener Duty relativ zum Vollausschlag (0..1)
+bool g_ledc_written = false;
+
+// next_ms < 0: noch keine Flanke geplant (neu angehaengt oder Luefter steht)
+struct IrqPin { void (*isr)(); int mode; double next_ms; int level; };
+std::map<int, IrqPin> g_irq;
+std::mutex g_irq_map_mutex;
+bool g_pulse_thread = false;
+
+double fan_rpm() {
+    std::string f = sim::read_file(sim::node_dir() + "/fan_rpm", "");
+    if (!f.empty()) { char* end = nullptr; double v = strtod(f.c_str(), &end); if (end != f.c_str() && v >= 0) return v; }
+    std::lock_guard<std::mutex> lk(g_ledc_mutex);
+    if (!g_ledc_written) return 0;
+    std::string pp = sim::read_file(sim::node_dir() + "/fan_power_pin", "");
+    if (!pp.empty()) {
+        int pin = atoi(pp.c_str());
+        std::lock_guard<std::mutex> gk(g_gpio_mutex);
+        if (g_pin_out.count(pin) && g_pin_out[pin] == 0) return 0;
+    }
+    return g_duty_frac * atof(sim::env("SIM_FAN_MAX_RPM", "3000").c_str());
+}
+
+// Ruft fuer jeden Interrupt-Pin die ISR mit rpm*2/60 Hz (Pulse pro Sekunde, 2 je Umdrehung) auf.
+// Ein Puls besteht aus zwei Flanken (HIGH -> LOW); FALLING zaehlt die LOW-Flanke, RISING die HIGH-Flanke.
+void pulse_thread() {
+    for (;;) {
+        double rpm = fan_rpm(), now = sim::now_ms();
+        double wait = 2;
+        std::vector<std::pair<int, void (*)()>> fire_list;  // ISRs ausserhalb des Map-Mutex rufen (attach/detach im kritischen Abschnitt)
+        {
+            std::lock_guard<std::mutex> mk(g_irq_map_mutex);
+            for (auto& kv : g_irq) {
+                IrqPin& p = kv.second;
+                if (rpm <= 0) { p.next_ms = -1; continue; }
+                double half = 1000.0 / (rpm * 2.0 / 60.0) / 2.0;
+                if (p.next_ms < 0) { p.next_ms = now + half; wait = std::min(wait, half); continue; }  // erste Flanke fruehestens nach einer Halbperiode
+                if (p.next_ms <= now) {
+                    // Hoechstens eine Flanke je Durchlauf; verpasste Flanken (Blockade) werden nicht nachgeholt.
+                    p.level ^= 1;
+                    p.next_ms = std::max(p.next_ms + half, now);
+                    bool fire = p.mode == CHANGE || (p.mode == RISING && p.level == 1) || (p.mode == FALLING && p.level == 0);
+                    if (fire && p.isr) fire_list.push_back({kv.first, p.isr});
+                }
+                wait = std::min(wait, std::max(0.1, p.next_ms - now));
+            }
+        }
+        for (auto& f : fire_list) {
+            sim_irq_lock();
+            bool still = false;
+            {
+                std::lock_guard<std::mutex> mk(g_irq_map_mutex);
+                auto it = g_irq.find(f.first);
+                still = it != g_irq.end() && it->second.isr == f.second;  // inzwischen abgehaengt -> nicht mehr rufen
+            }
+            if (still) f.second();
+            sim_irq_unlock();
+        }
+        sim::sleep_sim_ms(wait);
+    }
+}
+}  // namespace
+
+uint32_t ledcSetup(uint8_t ch, uint32_t freq, uint8_t bits) {
+    if (ch > 15 || bits < 1 || bits > 20 || freq == 0) return 0;
+    if ((uint64_t)freq << bits > 80000000ull) return 0;  // APB-Takt: freq * 2^bits <= 80 MHz, sonst keine Konfiguration
+    std::lock_guard<std::mutex> lk(g_ledc_mutex);
+    g_ledc[ch].freq = freq;
+    g_ledc[ch].bits = bits;
+    return freq;
+}
+void ledcAttachPin(uint8_t pin, uint8_t ch) {
+    if (ch > 15) return;
+    std::lock_guard<std::mutex> lk(g_ledc_mutex);
+    g_ledc[ch].pin = pin;
+}
+void ledcWrite(uint8_t ch, uint32_t duty) {
+    if (ch > 15) return;
+    int pin;
+    {
+        std::lock_guard<std::mutex> lk(g_ledc_mutex);
+        LedcChannel& c = g_ledc[ch];
+        if (c.bits == 0) return;  // Kanal nicht konfiguriert: wie in der Hardware wirkungslos
+        pin = c.pin;
+        double full = (double)((1u << c.bits) - 1);
+        g_duty_frac = std::min(1.0, duty / full);
+        g_ledc_written = true;
+    }
+    if (pin < 0) return;
+    sim::write_file(sim::node_dir() + "/pwm_" + std::to_string(pin), std::to_string(duty));
+    sim::event("ledc " + std::to_string(pin) + " " + std::to_string(duty));
+}
+void attachInterrupt(uint8_t pin, void (*isr)(), int mode) {
+    {
+        std::lock_guard<std::mutex> lk(g_irq_map_mutex);
+        g_irq[pin] = IrqPin{isr, mode, -1, 1};
+        if (!g_pulse_thread) { g_pulse_thread = true; std::thread(pulse_thread).detach(); }
+    }
+    sim::event("attach_irq " + std::to_string(pin) + " " + std::to_string(mode));
+}
+void detachInterrupt(uint8_t pin) {
+    // Unter g_irq_mutex: eine gerade laufende ISR ist vor der Rueckkehr beendet, danach wird keine mehr gerufen.
+    std::lock_guard<std::recursive_mutex> il(g_irq_mutex);
+    std::lock_guard<std::mutex> lk(g_irq_map_mutex);
+    g_irq.erase(pin);
+}
+
+// ---------------------------------------------------------------- Preferences (NVS als Dateien)
+std::string Preferences::path(const char* key) const { return sim::node_dir() + "/nvs/" + ns_ + "/" + key; }
+bool Preferences::begin(const char* name, bool readOnly, const char* /*partition_label*/) {
+    if (!name || !*name || strlen(name) > 15 || strchr(name, '/')) return false;
+    ns_ = name;
+    readOnly_ = readOnly;
+    std::string dir = sim::node_dir() + "/nvs/" + ns_;
+    struct stat st;
+    bool exists = stat(dir.c_str(), &st) == 0;
+    if (readOnly && !exists) return false;  // wie NVS: ESP_ERR_NVS_NOT_FOUND
+    if (!exists) sim::make_dirs(dir);
+    started_ = true;
+    return true;
+}
+void Preferences::end() { started_ = false; }
+// type == T_ANY: Schluessel existiert (egal welcher Typ); sonst muss das Typ-Tag passen. out = Nutzdaten.
+bool Preferences::readRaw(const char* key, std::string& out, uint8_t type) {
+    if (!started_ || !key || !*key || strlen(key) > 15 || strchr(key, '/')) return false;
+    std::ifstream f(path(key), std::ios::binary);
+    if (!f) return false;
+    std::stringstream ss;
+    ss << f.rdbuf();
+    std::string all = ss.str();
+    if (all.empty()) return false;  // ohne Typ-Tag kein gueltiger Eintrag
+    if (type != T_ANY && (uint8_t)all[0] != type) return false;
+    out = all.substr(1);
+    return true;
+}
+size_t Preferences::putRaw(const char* key, uint8_t type, const void* data, size_t len) {
+    if (!started_ || readOnly_ || !key || !*key || strlen(key) > 15 || strchr(key, '/')) return 0;
+    std::string tmp = path(key) + ".tmp" + std::to_string(getpid());
+    { std::ofstream f(tmp, std::ios::binary); f.put((char)type); f.write((const char*)data, (std::streamsize)len); if (!f) return 0; }
+    rename(tmp.c_str(), path(key).c_str());
+    sim::event("nvs_write " + ns_ + "/" + key);
+    return len;
+}
+bool Preferences::isKey(const char* key) { std::string r; return readRaw(key, r, T_ANY); }
+bool Preferences::remove(const char* key) {
+    if (!started_ || readOnly_) return false;
+    std::string r;
+    if (!readRaw(key, r, T_ANY)) return false;
+    return unlink(path(key).c_str()) == 0;
+}
+bool Preferences::clear() {
+    if (!started_ || readOnly_) return false;
+    std::string dir = sim::node_dir() + "/nvs/" + ns_;
+    if (DIR* d = opendir(dir.c_str())) {
+        while (dirent* e = readdir(d)) if (e->d_name[0] != '.') unlink((dir + "/" + e->d_name).c_str());
+        closedir(d);
+    }
+    return true;
+}
+String Preferences::getString(const char* key, String def) {
+    std::string raw;
+    if (!readRaw(key, raw, T_STR) || raw.empty()) return def;
+    return String(std::string(raw.c_str()));  // bis zum ersten NUL
+}
+size_t Preferences::getString(const char* key, char* out, size_t maxLen) {
+    std::string raw;
+    if (!readRaw(key, raw, T_STR) || raw.empty() || !out || maxLen == 0) return 0;
+    std::string v(raw.c_str());
+    if (v.size() + 1 > maxLen) return 0;
+    memcpy(out, v.c_str(), v.size() + 1);
+    return v.size();
+}
+size_t Preferences::getBytesLength(const char* key) {
+    std::string raw;
+    return readRaw(key, raw, T_BLOB) ? raw.size() : 0;
+}
+size_t Preferences::getBytes(const char* key, void* out, size_t maxLen) {
+    std::string raw;
+    if (!out || !maxLen) return 0;  // wie 2.0.17
+    if (!readRaw(key, raw, T_BLOB)) return 0;
+    if (raw.size() > maxLen) return 0;  // wie arduino-esp32: zu kleiner Puffer -> 0
+    memcpy(out, raw.data(), raw.size());
+    return raw.size();
+}
 
 // ---------------------------------------------------------------- ESP / Reset / Heap
 static esp_reset_reason_t g_reset_reason = ESP_RST_POWERON;
