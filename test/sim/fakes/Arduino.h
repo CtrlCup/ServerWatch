@@ -212,8 +212,8 @@ uint32_t esp_random();
 long random(long min, long max);
 void randomSeed(unsigned long);
 
-template <typename T, typename U> auto min(T a, U b) -> decltype(a < b ? a : b) { return a < b ? a : b; }
-template <typename T, typename U> auto max(T a, U b) -> decltype(a > b ? a : b) { return a > b ? a : b; }
+template <typename T, typename U> typename std::common_type<T, U>::type min(T a, U b) { return a < b ? a : b; }
+template <typename T, typename U> typename std::common_type<T, U>::type max(T a, U b) { return a > b ? a : b; }
 template <typename T> T constrain(T x, T lo, T hi) { return x < lo ? lo : (x > hi ? hi : x); }
 
 // ---------------------------------------------------------------- ESP

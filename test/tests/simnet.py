@@ -38,8 +38,10 @@ def hmac_hex(key, msg):
     return hmac.new(key.encode(), msg.encode(), hashlib.sha256).hexdigest()
 
 
-def expected_hostname(name, ip):
-    """Referenz fuer den Hostnamen (Spezifikation makeHostname): serverwatch-<bereinigt, max. 20>-<mac6>.
+def expected_hostname(name, ip, prefix="serverwatch-"):
+    """Referenz fuer den Hostnamen (Spezifikation makeHostname): <prefix><bereinigt, max. 20>-<mac6>.
+
+    prefix: "serverwatch-" (ServerWatch) oder "servertemp-" (ServerTemp).
 
     mac6 = letzte drei IP-Bytes des Knotens (Simulation: MAC 24:0A:C4:xx:xx:xx).
     """
@@ -50,7 +52,7 @@ def expected_hostname(name, ip):
     # wie makeHostname: fuehrende Trenner fallen weg, dann auf 20 Zeichen kuerzen, Trenner am Ende weg
     s = re.sub(r"-+", "-", re.sub(r"[^a-z0-9]", "-", s)).lstrip("-")[:20].rstrip("-")
     mac6 = "".join(f"{int(b):02x}" for b in ip.split(".")[1:])
-    return f"serverwatch-{s}-{mac6}" if s else f"serverwatch-{mac6}"
+    return f"{prefix}{s}-{mac6}" if s else f"{prefix}{mac6}"
 
 
 class Node:

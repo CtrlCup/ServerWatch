@@ -31,3 +31,35 @@ Jede Übergabe zwischen Rechnern hängt hier einen neuen Abschnitt an (nicht
 - Kein Chrome auf dem Server, Dashboard-Tests laufen über jsdom.
 - Modell dieser Session: `claude-opus-5-5`, gesetzt in `.claude/settings.local.json` (nur lokal, per `.git/info/exclude` ausgeschlossen).
 - Checkpoint für Usage-Limits: `~/.claude/resume/serverwatch.md` auf dem Server (Abschnitt 8 der globalen CLAUDE.md).
+
+## Übergabe Laptop → VibeCode-Server: ServerTemp (2026-10-04)
+
+**WICHTIG: Nicht selbstständig loslegen.** Alex wartet, bis sein wöchentliches Nutzungslimit zurückgesetzt ist. Diese Übergabe sichert nur den Stand. Arbeite erst weiter, wenn Alex ausdrücklich den Startauftrag gibt.
+
+**Auftrag (Originalwortlaut, gekürzt):** „...einen Code, dass ich den auf einen ESP draufspielen kann und der dann eine Temperatur misst mit einem Temperatursensor und je nachdem wie die Temperatur ist, dann eine Kennlinie hat und dann einen Lüfter damit steuert. Und das soll es auch als Single und als Multi geben. Und im Multi soll der auch in dem Dashboard angezeigt werden von den anderen ESPs ... Drehzahl sehen ... an/aus ... Statusanzeige ... Drehzahl manuell hoch/runter, an/aus, Auto ... neuen Ordner ... ServerTemp ... README mit Flash-Erklärung ... automatisch im Serverwatch-Netzwerk erkennen ... ggf. Änderung bei Serverwatch.“
+
+**Freigegebener Plan:** `.vibe/plan-servertemp.md` (inkl. Abschnitt „Sicherheitsvorgaben“, verbindlich). Entscheidungen von Alex stehen dort, zusätzlich: „Aus“ wird nie gespeichert (nach Neustart Auto).
+
+### Stand
+- [x] Commit 1 (Simulation: Unterordner-Sketches) und Commit 2 (Fakes DS18B20/LEDC/Tacho/Preferences): auf `main` (00813b7, 7a9266d).
+- [~] Commit 3 ServerTemp Single, liegt auf diesem Branch als WIP (nicht auf main):
+  - Firmware `ServerTemp/ServerTemp/ServerTemp.ino` (v1.0.0) mit `platformio.ini` und `secrets.example.h` ist fertig. Echter Build für den ESP32-C3: SUCCESS, Flash 62,6 %, RAM 12,8 %.
+  - Tests `test/tests/test_servertemp.py`: 123/130 grün. Die 7 roten sind **Testfehler**, nicht Firmware-Fehler (vom Orchestrator geprüft):
+    1. `test_device_name_xss_only_in_json_string` widerspricht `test_hostname_sanitized` (bereinigter Hostname enthält legitim „script“). Stattdessen prüfen: Hostname nur [a-z0-9-], deviceName kommt im JSON exakt als String zurück.
+    2. `test_curve_points_below_on_between_above[fallend]` und `test_sensor_recovers_after_rescan`: Die Standardkurve ergibt bei 30 °C 37,5 % (Interpolation), nicht 30 %. Erwartung aus der Kurve berechnen.
+    3. `test_overtemp_all_modes[auto|manual]` und `test_sensor_failure_failsafe_without_ramp`: Die Event-Basis wird genommen, während die Abwärtsrampe noch läuft. Erst auf einen stabilen Ausgang warten, dann prüfen, dass das erste neue ledc-Event 255 ist.
+  - Flakes: `test_control_continues_without_wifi` (mit wait_for auf failsafe/pct warten), `test_out_of_range_is_invalid[126]` unter Last, `test_stall_after_5s_at_30_pct_or_more` (neu entdeckt, noch nicht analysiert).
+  - Bereits behoben: Fake-Fehler `min`/`max` in `test/sim/fakes/Arduino.h` (dangling reference → Rückgabe per Wert). `simnet.expected_hostname(name, ip, prefix)`.
+  - Noch zu tun in Commit 3: das Standard-Passwort in `ServerTemp.ino` (Zeilen ~30 und ~855) von „servertemp“ auf „serverwatch“ ändern, damit es in der ganzen Gerätefamilie einheitlich ist (gemeinsame secrets.h). Danach die Tests korrigieren (Rolle tester), dann scope-guard/regression-guard/reviewer, Commit „feat(servertemp): Einzel-Firmware“.
+- [ ] Commit 4 Dashboard (Lüfterkarte, Kennlinien-Editor, Polling-Fallback, embed_html.py mit mehreren Zielen)
+- [ ] Commit 5 ServerTemp Multi + test_code_sync.py
+- [ ] Commit 6 ServerWatch 1.2.0 (Gerätetyp, Lüfterfelder, appendRemoteEntries) + test_mixed_swarm.py
+- [ ] Commit 7 CI-Firmware-Build der ServerTemp-Sketches (`PLATFORMIO_WORKSPACE_DIR=test/.build/firmware/<name> pio run -d <sketchdir>`)
+- [ ] Commit 8 Doku: `ServerTemp/README.md`, Verweise in README/PROJECT_OVERVIEW, KI-Brain (ESP32 TempManager ersetzt)
+
+### Arbeitsweise
+- Wie in der globalen CLAUDE.md: security → tester → developer → scope-guard/regression-guard/reviewer → release-guard vor jedem Push. Die Sicherheitsvorgaben aus dem Plan sind bereits erarbeitet.
+- Fertige Commits nach den Guards auf **main** pushen (wie bisher). Den WIP-Branch danach aufräumen bzw. nach main mergen, sobald Commit 3 grün ist.
+- Spezifikationsdetails für ServerTemp Single: siehe Docstrings und Asserts in `test/tests/test_servertemp.py` sowie den Plan. Klärungen des Orchestrators: „off“ sofort 0 (keine Rampe); Kurve 0 → Rampe auf 0, dann aus; temp null ohne gültigen Sensorwert; manPct-Standard 50; dc3-Kickstart 100 % für kickstartMs, dann Rampe.
+- Checkpoint auf dem Server: `~/.claude/resume/serverwatch.md` (Abschnitt 8 der globalen CLAUDE.md).
+- Testumgebung: `test/.venv` (python3-venv fehlt systemweit, venv per get-pip angelegt), `test/js/node_modules` (npm ci).
